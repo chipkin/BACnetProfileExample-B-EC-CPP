@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Restructured documentation to match the series' README/TUTORIAL/PICS split
+  (see `BACnetProfileExample-B-SS-CPP`, `docs/readme-tutorial-pics-restructure`):
+  `README.md` cut down to this example only (series framing, the generic
+  profile explanation, "Before you ship", "Link mode", "Troubleshooting",
+  "Extending the example", "Objects and properties", and the CC0 paragraph
+  removed - 607 -> 350 lines), a new `TUTORIAL.md` (extending the example,
+  what each object type needs served, a representative object's served-by
+  breakdown, the Relinquish_Default bug carried over verbatim, "Reviewing your
+  device", and Troubleshooting), and a new `docs/PICS.md` (ANSI/ASHRAE 135
+  Annex A shape, every row read from `main.cpp`).
+- `docs/objects.json` gained a `Device` entry (first in the list) so the
+  generated tables include the Device object; regenerated with
+  `tools/gen-objects-properties.py` - **0 ⚠ rows**.
+- **Build switched from a prebuilt STATIC library to the adapter's default
+  SOURCE mode**: `cmake -B build -S .` / `cmake --build build --config
+  Release`, with no `tools/build-stack-static.sh` step and no
+  `-DCAS_BACNET_STACK_LINK=STATIC` flag. `CMakeLists.txt`, `AGENTS.md`, and
+  `.github/workflows/release.yml` (dropped the static-library cache/build
+  steps and the matrix `lib:` entries; link-mode assertion now expects
+  `SOURCE`; `metrics.json` now records `"link_mode": "SOURCE"`; the packaged
+  release artifact now also includes `TUTORIAL.md` and `docs/PICS.md`) were
+  all updated to match. The v1.0.0 footprint numbers in `README.md` were
+  measured from the old STATIC build; a note says the next release refreshes
+  them under the SOURCE build documented now.
+- `main.cpp`'s `CHANGE ALL OF THIS BEFORE YOU SHIP` block absorbed the
+  per-field ship guidance that used to live only in the README's "Before you
+  ship" table, including the `DEVICE_NAME` uniqueness warning.
+- Re-synced the series table (`tools/sync-profile-table.sh
+  BACnetProfileExample-B-EC-CPP`) and `AGENTS.md`'s layout/build sections.
+
 ## [1.0.0] - 2026-09-15
 
 ### Added
