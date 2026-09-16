@@ -104,7 +104,7 @@ All notable changes to this project are documented in this file.
   correctly, but it was **not** independently wire-verified with a live
   client in this session - `BACnetLandingCallStatus`'s write-side
   SEQUENCE-CHOICE encoding could not be cleanly expressed through the
-  available test-client library (`bacpypes3` 0.0.106). WritePropertyMultiple
+  test-client library available in this session. WritePropertyMultiple
   is enabled and reachable (a WPM APDU sent to the device returns a real
   BACnet reject/response rather than "unsupported service"), but a
   successful multi-property write was not completed end-to-end in this
