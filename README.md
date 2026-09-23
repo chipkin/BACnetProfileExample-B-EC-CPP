@@ -49,7 +49,7 @@ family) are unchanged from B-EM, which remains their canonical source.
 ## The device this example creates
 
 ```
-Device 389013  "Rainbow"   (Vendor 389 - Chipkin Automation Systems)
+Device 389013  "Chipkin Example B-EC"   (Vendor 389 - Chipkin Automation Systems)
     ├── Analog Input  1            "Bronze"      read-only sensor (REAL, deg C); F-COVM demo (COV on 2 properties)
     ├── Binary Input  1            "Emerald"     read-only sensor (active/inactive)
     ├── Multi-State Input 1        "Hot Pink"    read-only sensor (state 1..3)
@@ -65,7 +65,7 @@ Device 389013  "Rainbow"   (Vendor 389 - Chipkin Automation Systems)
 ```
 
 Object names follow the series' colour convention (Device is always
-"Rainbow"). Every required property of every object, and who answers it, is in
+"Chipkin Example B-EC"). Every required property of every object, and who answers it, is in
 [docs/PICS.md](docs/PICS.md).
 
 ## What this example supports
@@ -114,7 +114,7 @@ synchronizes local time only).
 
 | Object type | Instance | Name |
 |-------------|:--------:|------|
-| Device | 389013 | Rainbow |
+| Device | 389013 | Chipkin Example B-EC |
 | Analog Input | 1 | Bronze |
 | Binary Input | 1 | Emerald |
 | Multi-State Input | 1 | Hot Pink |
@@ -215,7 +215,7 @@ CAS BACnet Stack version: 6.0.21.0
 Common helper (common/) version: 2.5.0
 FYI: Listening for BACnet/IP on UDP port 47808 (Network Port 1).
 TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1)
-FYI: Device 389013 ("Rainbow") ready. Vendor ID 389. Accepts WriteProperty to Chartreuse/Fuchsia/Indigo and Landing_Call_Control on Maroon. Press 'd' to broadcast a demo Who-Is (DM-DDB-A), or 'h' for help.
+FYI: Device 389013 ("Chipkin Example B-EC") ready. Vendor ID 389. Accepts WriteProperty to Chartreuse/Fuchsia/Indigo and Landing_Call_Control on Maroon. Press 'd' to broadcast a demo Who-Is (DM-DDB-A), or 'h' for help.
 ```
 
 The `TX` line is the start-up I-Am the device broadcasts to announce itself. It
@@ -267,7 +267,7 @@ Use a BACnet client such as the
    instance **389013** (vendor **389**). It also broadcasts an I-Am at
    start-up.
 2. **Browse the object model** - the device shows thirteen objects: the Device
-   (`Rainbow`), the three read-only sensors, the three commandable outputs,
+   (`Chipkin Example B-EC`), the three read-only sensors, the three commandable outputs,
    the Network Port (`Vermilion`), the Elevator Group/Lift/Escalator family,
    the Positive Integer Value, and the Notification Class. Reading the
    Device's `Object_List` returns all thirteen; `Protocol_Revision` = 24.
