@@ -1091,8 +1091,8 @@ bool GetSequenceLiftLandingDoorStatus(const uint32_t deviceInstance, const uint3
 
 // -----------------------------------------------------------------------------
 // 2c. SetElevatorGroupLandingCallControl (NEW vs B-EM) - the "controller" half
-// of "Elevator Controller". B-EM deliberately left this UNREGISTERED (see its
-// file header) so LandingCallControl was never made writable to begin with.
+// of "Elevator Controller". B-EM deliberately leaves this UNREGISTERED and its
+// Elevator Group has no Landing_Call_Control at all (see its file header).
 // Registering it here is what turns this device from a monitor into a
 // controller: the stack decodes the WriteProperty's BACnetLandingCallStatus
 // SEQUENCE and hands us the fields; we just remember the last one (a real
