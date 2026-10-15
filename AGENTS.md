@@ -137,13 +137,15 @@ commands a write - use a BACnet client).
 
 ## How to verify a change
 
-There are no unit tests; verification is behavioural:
+The Wire Tests in `tests/` automate the discovery half of this (README "Wire
+Tests"): `python3 tests/run_wire_tests.py --exe build/BACnetExampleBEC`. Run them
+after any change. Beyond them, verification is behavioural:
 
 1. Build, then run one instance on a clear UDP port.
 2. With a BACnet client (e.g. the CAS BACnet Explorer, or `bacpypes3`/`BAC0`),
    send **Who-Is** and confirm **I-Am** from the device instance.
 3. **ReadProperty** every required property of every object and confirm the
-   values; confirm `Protocol_Revision` is 24 and `Object_List` lists all
+   values; confirm `Protocol_Revision` is 30 and `Object_List` lists all
    thirteen objects.
 4. **F-OUTPUTS**: WriteProperty each output's `Present_Value` at a priority,
    confirm the readback; relinquish (WriteProperty NULL) and confirm it falls
@@ -151,9 +153,9 @@ There are no unit tests; verification is behavioural:
    State Output and confirm `value-out-of-range`.
 5. **F-ELEVATOR**: ReadProperty every Elevator Group / Lift / Escalator
    property (unchanged checklist from B-EM); WriteProperty a landing call to
-   `Landing_Call_Control` and confirm it reads back (this specific write was
-   NOT independently wire-verified during this repository's own
-   implementation - see CHANGELOG.md - confirm it if you touch this code).
+   `Landing_Call_Control` and confirm it reads back (before any write it reads
+   floor 0, direction none; a raw-encoded write `09 07 19 03` round-tripped on
+   2026-10-15, by hand - it is not yet a Wire Test).
 6. **DS-COVM-B / DS-COV-B**: unchanged from B-EM.
 7. **Alarming**: unchanged from B-EM.
 8. **DM-TS-B**: TimeSynchronization to an arbitrary date/time; confirm

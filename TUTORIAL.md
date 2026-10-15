@@ -161,7 +161,9 @@ rather than against "it looked fine in the explorer":
    (see [Keeping the PICS honest](#keeping-the-pics-honest) below). A ⚠ row is
    a required property nothing serves.
 2. Read **every** property listed for **every** object with a BACnet client,
-   and compare the value against the PICS. `"undefined"`, `no-units`, `0`, and
+   and compare the value against the PICS. `tests/run_wire_tests.py` reads them
+   all and fails on any that does not return a value (README "Wire Tests") -
+   keep it passing, then check the values yourself. `"undefined"`, `no-units`, `0`, and
    `value-not-initialized`/`read-access-denied` are the shapes a missed
    callback takes.
 3. Diff a new object of a type against the existing one of that type. Anything
@@ -172,10 +174,10 @@ rather than against "it looked fine in the explorer":
    (anything but 0/1) or Multi-State Output (0 or >3) and confirm
    `value-out-of-range`.
 5. **F-ELEVATOR**: WriteProperty a landing call to `Landing_Call_Control` and
-   confirm it reads back through `GetListElevatorGroupLandingCallStatus`. This
-   specific write path was code-reviewed but **not** independently
-   wire-verified during this repository's own implementation - see
-   `CHANGELOG.md` - confirm it yourself if you touch this code.
+   confirm it reads back through `GetListElevatorGroupLandingCallStatus`
+   (before any write it reads floor 0, direction `none`). A raw-encoded write
+   (`09 07 19 03`, floor 7 up) round-tripped on 2026-10-15, checked by hand -
+   confirm it yourself if you touch this code.
 6. Confirm services this profile does **not** implement (e.g. AE-CRL-B -
    `Recipient_List` is not writable here) are still rejected.
 
