@@ -39,7 +39,7 @@ def value(client, port, object_identifier, property_identifier=PROPERTY_PRESENT_
 def main():
     args = setup.parser(__doc__).parse_args()
     example = setup.start_controller(args)
-    client = wiretest.Client()     # setup.ask() does the retrying
+    client = setup.client()        # retries a lost request, visibly
     try:
         # --- 1. Chartreuse -------------------------------------------------------------------
         record("Chartreuse starts at its Relinquish_Default, 20.0", value(client, args.port, CHARTREUSE) == 20.0,

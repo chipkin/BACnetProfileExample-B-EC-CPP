@@ -13,7 +13,7 @@ Landing_Calls: "Each element of this list shall represent a currently active cal
 group of lifts."
 
 The Peer is a Python client playing a landing-call panel. It writes Landing_Call_Control
-(a raw BACnetLandingCallStatus - tests/landing_call.py) and watches the car over BACnet: a
+(a raw BACnetLandingCallStatus - wiretest.services.landing_call_status) and watches the car over BACnet: a
 SubscribeCOVPropertyMultiple on the car, ReadPropertyMultiple snapshots, and reads of
 Landing_Calls / Assigned_Landing_Calls / Registered_Car_Call. Nothing reaches into the
 example except the Simulation's speed (the test-only control channel).
@@ -36,10 +36,9 @@ import sys
 import time
 
 import ec_setup as setup  # first: it puts the vendored wiretest/ on sys.path
-import cov_multiple
 from ec_setup import (DIRECTION_DOWN, DIRECTION_STOPPED, DIRECTION_UP, DOOR_CLOSED, DOOR_OPENED, DOOR_OPENING,
                       DOOR_SAFETY_LOCKED, LIFT, acked)
-from landing_call import DIRECTION_NONE
+from wiretest.services import LIFT_CAR_DIRECTION_NONE as DIRECTION_NONE
 import wiretest
 from wiretest import record
 
@@ -50,10 +49,10 @@ class Subscriber:
     """The panel's COV subscription on the car, and the changes it has heard, in order."""
 
     def __init__(self):
-        self.client = wiretest.Client()
+        self.client = setup.client()
 
     def subscribe(self, port):
-        return setup.ask(self.client, lambda invoke_id: cov_multiple.subscribe_cov_property_multiple_request(
+        return self.client.request(lambda invoke_id: wiretest.services.subscribe_cov_property_multiple_request(
             invoke_id, COV_PROCESS_IDENTIFIER, False, 600, [(*LIFT, list(setup.CAR_PROPERTIES))]), port)
 
     def listen(self, seconds):
@@ -62,8 +61,8 @@ class Subscriber:
         self.client.collect(seconds)
         changes = []
         for frame in self.client.frames:
-            if frame.ok and cov_multiple.is_cov_notification_multiple(frame):
-                for monitored, property_identifier, _, octets in cov_multiple.CovNotificationMultiple(frame).values:
+            if frame.ok and wiretest.services.is_cov_notification_multiple(frame):
+                for monitored, property_identifier, _, octets in wiretest.services.CovNotificationMultiple(frame).values:
                     if monitored == LIFT:
                         changes.append((property_identifier, wiretest.decode_application(octets)))
         return changes
@@ -103,7 +102,7 @@ def follow_call(panel, args, floor, seconds):
 def main():
     args = setup.parser(__doc__).parse_args()
     example = setup.start_controller(args)
-    panel = wiretest.Client()     # setup.ask() does the retrying
+    panel = setup.client()        # retries a lost request, visibly
     subscriber = Subscriber()
     hands = None
     try:

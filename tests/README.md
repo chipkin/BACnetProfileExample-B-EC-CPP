@@ -41,11 +41,12 @@ the test, playing the physical world                    (BEC_SIMULATION_CONTROL_
 The Peers are Python BACnet clients (`wiretest.Client`, `wiretest.Workstation`),
 never another example's binary. Landing calls are always BACnet: a
 WriteProperty of Maroon's `Landing_Call_Control` with a raw-encoded
-BACnetLandingCallStatus built by [`landing_call.py`](landing_call.py) (generic,
-proposed for `wiretest/` 0.7.0). The control channel only presses the car's
+BACnetLandingCallStatus built by `wiretest.services.landing_call_status()`
+(wiretest 0.7.0). The control channel only presses the car's
 alarm button, blocks its doorway and speeds it up (500 ms per floor, 250 ms per
 door move, 600 ms dwell). Retries and the COV-based ordered checks work as in
-B-EM-CPP (`ec_setup.ask()`: a visible `[RETRY]` after 0.5 s - Windows loopback
+B-EM-CPP (`ec_setup.client()` / `ec_setup.workstation()`, wiretest's
+`retries=2, timeout=0.5`: a visible `[RETRY]` after 0.5 s - Windows loopback
 on a loaded machine was measured losing about one datagram in 700).
 
 ## `landing_call_test.py` - the Profile Function

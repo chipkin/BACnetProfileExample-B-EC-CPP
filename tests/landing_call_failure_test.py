@@ -47,7 +47,7 @@ def fault_state(workstation, args):
 
 def main():
     args = setup.parser(__doc__).parse_args()
-    workstation = wiretest.Workstation()
+    workstation = setup.workstation()
     example = setup.start_controller(args, recipient_port=workstation.port)
     hands = None
     try:

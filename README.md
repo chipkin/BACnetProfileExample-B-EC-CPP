@@ -382,7 +382,7 @@ The scenario above, automated. Python clients - the Peers: a landing-call
 panel, an operator workstation that is also Crimson's event recipient, a COV
 subscriber - drive the running example over BACnet/IP from outside it. The
 landing calls are raw-encoded BACnetLandingCallStatus values
-(`tests/landing_call.py`). Python 3 standard library only:
+(`wiretest.services.landing_call_status`). Python 3 standard library only:
 
 ```bash
 python3 tests/run_wire_tests.py --exe build/BACnetExampleBEC          # Linux/macOS

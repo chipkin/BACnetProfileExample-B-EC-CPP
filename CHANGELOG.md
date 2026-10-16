@@ -50,6 +50,7 @@ landing call written over BACnet is now served.
 - ReinitializeDevice COLDSTART also clears the landing calls and the car's stops.
 - `main.cpp`'s header cited Annex L.14 for B-EC; it is L.13.2.
 - Application_Software_Version 1.2.0.
+- Wire Tests use the shared `wiretest/` 0.7.0: `tests/landing_call.py`, `simulation_control.py`, `property_multiple.py` and `cov_multiple.py` are folded into it (`wiretest.services`, `wiretest.SimulationControl`), and `ec_setup.ask()` is `wiretest.Client` / `Workstation(retries=2, timeout=0.5)`.
 
 ## [1.1.0] - unreleased
 
