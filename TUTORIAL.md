@@ -26,10 +26,17 @@ file header and `AGENTS.md`'s Conventions section):
   verbatim from `BACnetProfileExample-B-SA-CPP`: the `Commandable` struct,
   `CommandWrite`/`CommandRelinquish`, `ReadPrioritySlot`, `GetCommandable`,
   and the `SetProperty*` callbacks.
-- **F-ELEVATOR** - the Elevator Group / Lift / Escalator object family,
-  unchanged from `BACnetProfileExample-B-EM-CPP`, except that
-  `BACnetStack_RegisterCallbackSetElevatorGroupLandingCallControl` is now
-  registered so `Landing_Call_Control` is writable.
+- **F-ELEVATOR** - the Elevator Group / Lift / Escalator object family, from
+  `BACnetProfileExample-B-EM-CPP`, plus
+  `BACnetStack_RegisterCallbackSetElevatorGroupLandingCallControl`: a landing
+  call written to `Landing_Call_Control` is served by the car.
+- **The lift car** - **Simulation** (`simulation/ElevatorCar.cpp`, the same file
+  as B-EM's; README "What is Simulation"). `SetElevatorGroupLandingCallControl`
+  sends it (`g_car.RequestStop`), `RunLandingCalls()` clears a call when the car
+  stops at its floor, and `ReportCarChanges()` calls `BACnetStack_UpdateValue`
+  for every car property that changed - without that call no COV subscriber
+  and no event algorithm hears of it. To drive a real elevator, replace `g_car`
+  and keep those three seams.
 - **F-TIMESYNC** - TimeSynchronization, the canonical pattern copied verbatim
   from `BACnetProfileExample-B-LD-CPP`.
 - **F-REINIT** - ReinitializeDevice with a deferred (post-ACK) restart, the
@@ -173,11 +180,12 @@ rather than against "it looked fine in the explorer":
    back to `Relinquish_Default`; write an out-of-range value to Binary Output
    (anything but 0/1) or Multi-State Output (0 or >3) and confirm
    `value-out-of-range`.
-5. **F-ELEVATOR**: WriteProperty a landing call to `Landing_Call_Control` and
-   confirm it reads back through `GetListElevatorGroupLandingCallStatus`
-   (before any write it reads floor 0, direction `none`). A raw-encoded write
-   (`09 07 19 03`, floor 7 up) round-tripped on 2026-10-15, checked by hand -
-   confirm it yourself if you touch this code.
+5. **F-ELEVATOR**: run `tests/landing_call_test.py` and
+   `tests/landing_call_failure_test.py`. By hand: WriteProperty a landing call
+   to `Landing_Call_Control` (raw `09 06 19 04` = floor 6, down; before any write
+   it reads floor 0, direction `none`), watch it appear in Maroon's
+   `Landing_Calls`, the car's `Car_Position` climb to 6, and the call clear; a
+   call for floor 9 must be refused.
 6. Confirm services this profile does **not** implement (e.g. AE-CRL-B -
    `Recipient_List` is not writable here) are still rejected.
 
@@ -215,5 +223,6 @@ and not in `accepted`, comes out as a ⚠ row - that is a defect, not a feature.
 | App prints *"Failed to bind UDP port 47808"* | Another BACnet program is already using 47808. Stop it, or run with `--port <n>`. |
 | Client sends Who-Is but sees no I-Am | Firewall is blocking UDP 47808, or the client and device are on different subnets (Who-Is is a broadcast). Allow the port; test on the same subnet first. |
 | WriteProperty to a commandable output returns an error instead of the expected `value-out-of-range` | Confirm you're writing to `Present_Value` on Chartreuse/Fuchsia/Indigo, not another property, and that the value is decodable as the object's datatype (Real for Chartreuse, 0/1 for Fuchsia, an Unsigned state for Indigo). |
-| `Landing_Call_Control` write appears to succeed but a subsequent read shows no queued call | Confirm the WriteProperty targets Elevator Group 1 (Maroon) and property `Landing_Call_Control`, not `Landing_Calls` (the group's own queue, which this example never populates independently - see `docs/objects.json`'s note on Maroon). |
+| `Landing_Call_Control` write succeeds but `Landing_Calls` is empty | The car may already have served it: a call clears the moment the car stops at its floor (a call for the floor the car stands at clears at once). Read `Landing_Call_Control` - the last accepted call - or watch `Car_Position`. |
+| A landing call is in `Landing_Calls` but the car does not move | The car is faulted: read Mauve's `Fault_Signals` / `Reliability`. A faulted car is assigned no calls (`Assigned_Landing_Calls` empty) until its door closes. |
 | Replies show an unexpected device instance or vendor | Another BACnet device is already answering on this host/port. On Linux/macOS two processes can share the port and both reply; on Windows the example asks for `SO_EXCLUSIVEADDRUSE` (`common/SimpleUDP.cpp`) so this shows up as a bind failure instead. Stop the other device, or use `--port`. |

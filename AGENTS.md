@@ -84,12 +84,19 @@ commands a write - use a BACnet client).
   `AddLiftOrEscalatorObject` pattern - see B-EM's AGENTS.md for the full
   writeup. The one genuinely new piece:
   **`RegisterCallbackSetElevatorGroupLandingCallControl` IS registered here**
-  (B-EM deliberately does not register it). The queued call is stored in
-  `g_queuedLandingCall` and read back through
-  `GetListElevatorGroupLandingCallStatus`, which now branches on
-  `propertyIdentifier` (`Landing_Call_Control` vs `Landing_Calls`) - B-EM's
-  read-only version ignored that parameter because it only ever answered
-  `Landing_Calls`.
+  (B-EM deliberately does not register it). An accepted call is the Profile
+  Function: it is kept in `g_landingCalls` (Maroon's `Landing_Calls`, and the
+  car's `Assigned_Landing_Calls` unless the car is faulted), the simulated car
+  is sent to the floor, and `RunLandingCalls()` clears it the moment the car
+  stops there. A floor outside 1-8 is refused. The last accepted call is
+  `g_queuedLandingCall`, read back through
+  `GetListElevatorGroupLandingCallStatus`, which branches on
+  `propertyIdentifier` (`Landing_Call_Control` vs `Landing_Calls`).
+- The lift car is **Simulation** (`simulation/`, the same files as B-EM's -
+  keep them identical; change both). The Wire Tests drive it through the
+  test-only control channel (`BEC_SIMULATION_CONTROL_PORT`) and add a confirmed
+  event recipient with `BEC_TEST_EVENT_RECIPIENT_PORT` - README "What is
+  Simulation". Keep that label if you touch them.
 - F-TIMESYNC is the canonical pattern from `BACnetProfileExample-B-LD-CPP`,
   copied verbatim - `SyncedDateTime`, `InitSyncedDateTimeFromHost`,
   `SetSystemTime`, `GetPropertyDate`/`GetPropertyTime`. Only

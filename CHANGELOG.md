@@ -2,6 +2,55 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.0] - unreleased
+
+Profile-functional (series bar, `docs/GLOSSARY.md` in the series repository).
+ANSI/ASHRAE 135-2024 L.13.2: "A B-EC device performs elevator control. It
+supports limited modification of its elevator objects by another device." A
+landing call written over BACnet is now served.
+
+### Added
+
+- **The lift car Simulation** (`simulation/`, the same files as B-EM-CPP 1.2.0;
+  README "What is Simulation"): floors 1-8, one floor every 2 s, door cycle,
+  collective control, a door interlock, and a doorway that can be obstructed
+  into `DOOR_CLOSING_FAULT`. No simulated passengers: the car moves only for
+  landing calls.
+- **Landing calls are served** (cl. 12.58.10): an accepted write to Maroon's
+  `Landing_Call_Control` (a direction or a destination call) enters
+  `Landing_Calls` (now the group's active calls, cl. 12.58.9) and the car's
+  `Assigned_Landing_Calls`, sends the car, and clears the moment the car stops
+  at the floor. A destination call then becomes a car call
+  (`Registered_Car_Call`) to its destination.
+- **Failure Modes**: a call for a floor outside 1-8 (or a destination outside
+  1-8) is refused with an Error; a call while the car is faulted is accepted
+  into `Landing_Calls` but not assigned, and served once the car recovers.
+- **Lift 1 "Mauve" presents the car** (`Car_Position`, `Car_Moving_Direction`,
+  `Car_Door_Status`, `Fault_Signals`, `Landing_Door_Status`, all live and
+  subscribable where they change) and arms **FAULT_LISTED** on
+  `Fault_Signals` with `Reliability` enabled; to-fault is now enabled.
+- **`Number_Of_APDU_Retries` = 3** (cl. 12.11.29).
+- **Test-only hooks**, neither a command-line option: `BEC_SIMULATION_CONTROL_PORT`
+  (loopback control channel: alarm button, doorway, speed) and
+  `BEC_TEST_EVENT_RECIPIENT_PORT` (a confirmed Crimson recipient at 127.0.0.1).
+- **`s` key**: press / release the car's passenger alarm button.
+- **Wire Tests**: `landing_call_test.py` (the Profile Function),
+  `landing_call_failure_test.py` (both Failure Modes, with FAULT_LISTED
+  notifications), `passenger_alarm_test.py` (CHANGE_OF_STATE, GetEventInformation,
+  AcknowledgeAlarm with ACK_NOTIFICATION; the car's status refuses writes) and
+  `outputs_test.py` (priority arbitration; MSO state 9 refused). Generic helpers
+  proposed for `wiretest/` 0.7.0 in `tests/`: `landing_call.py`
+  (BACnetLandingCallStatus encoder/decoder), `simulation_control.py`,
+  `property_multiple.py`, `cov_multiple.py`. Default port 48035.
+
+### Changed
+
+- The passenger alarm no longer toggles on a 30-second timer; it is the car's
+  alarm button (`s`, or the control channel).
+- ReinitializeDevice COLDSTART also clears the landing calls and the car's stops.
+- `main.cpp`'s header cited Annex L.14 for B-EC; it is L.13.2.
+- Application_Software_Version 1.2.0.
+
 ## [1.1.0] - unreleased
 
 ### Fixed

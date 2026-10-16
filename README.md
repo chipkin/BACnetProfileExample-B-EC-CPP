@@ -5,9 +5,12 @@ Controller)** device profile, in C++, using the
 [CAS BACnet Stack](https://store.chipkin.com/services/stacks/bacnet-stack). It
 answers **ReadProperty / ReadPropertyMultiple**, accepts **WriteProperty /
 WritePropertyMultiple** to three commandable outputs and to the Elevator
-Group's landing-call control, supports **SubscribeCOV** and
-**SubscribeCOVPropertyMultiple**, generates **intrinsic alarms**
-(EventNotifications when the Lift's `Passenger_Alarm` goes active), accepts
+Group's **landing-call control - and serves the call**: a lift car (a
+[Simulation](#what-is-simulation)) travels to the floor, opens its door, and the
+call clears. It supports **SubscribeCOV** and **SubscribeCOVPropertyMultiple**,
+generates **intrinsic alarms** (an EventNotification when a passenger presses
+the car's alarm button, and a fault notification when a car door fails to
+close), accepts
 **AcknowledgeAlarm** and answers **GetEventInformation**, handles
 **DeviceCommunicationControl**, **initiates discovery** (Who-Is) on demand,
 accepts **TimeSynchronization**, and accepts **ReinitializeDevice**.
@@ -20,20 +23,81 @@ accepts **TimeSynchronization**, and accepts **ReinitializeDevice**.
 - **[docs/PICS.md](docs/PICS.md)** - the Protocol Implementation Conformance
   Statement: every object, every property, and who answers it.
 
-> **Versions:** this document describes **example v1.1.0**, built and verified
+> **Versions:** this document describes **example v1.2.0**, built and verified
 > against **CAS BACnet Stack 6.0.23** (`6.x` @ `64b2cfac5`), at
 > **Protocol_Revision 30**, with the vendored `common/` helper at **v3.4.0**.
 > Running the example prints all three - if what it prints disagrees with this
 > line, trust the program and check `CHANGELOG.md`.
 
-> **Status: BIBB-conformant, not yet Profile-functional.** Every BIBB, object
-> and service the profile requires answers, and the Wire Tests prove every
-> listed property reads. But this controller does not control anything yet: a
-> landing call written to `Landing_Call_Control` is **stored and read back,
-> nothing more** - the Lift's `Car_Position` stays at floor 3, its doors and
-> direction are constants, and the three outputs drive nothing. A real
-> controller would forward the call to the elevator and move the car; a car
-> simulation that answers the call, proven by a Wire Test, is the next step.
+> **Status: Profile-functional.** ANSI/ASHRAE 135-2024 L.13.2: "A B-EC device
+> performs elevator control. It supports limited modification of its elevator
+> objects by another device." A landing call written over BACnet is served by
+> the car, a call it cannot serve is refused, a faulted car holds its calls
+> until it recovers, and the [Wire Tests](#wire-tests) prove it against a
+> Python-simulated landing-call panel - each check shown to fail with its
+> feature removed. The three commandable outputs still drive nothing; they
+> arbitrate priorities, and a Wire Test proves that too.
+
+## The scenario: a landing call, answered
+
+What a B-EC is for, in one sentence: **it runs the lift a building system
+calls.** The Peer is whatever sends landing calls on a real site - a
+destination-dispatch kiosk, a BMS, a security system calling the car to a
+floor - or the Python client in [`tests/`](tests/README.md). It writes
+Maroon's `Landing_Call_Control` (cl. 12.58.10: "A write to this property is
+equivalent to a passenger pressing a call button at a landing, indicating
+either desired direction of travel or destination floor"):
+
+1. Someone at floor 6 presses DOWN: the Peer writes `{ floor 6, direction
+   DOWN }`. `Landing_Call_Control` reads it back; Maroon's `Landing_Calls`
+   (12.58.9: "a currently active call for the group of lifts") and the car's
+   `Assigned_Landing_Calls` (12.59.11) list it.
+2. The car locks its door (`SAFETY_LOCKED`), goes `UP` one floor at a time at
+   its speed - `Car_Position` 2, 3, 4, 5, 6 - stops, and opens its door. The
+   moment it stops at 6 the call leaves `Landing_Calls`.
+3. A **destination call** `{ floor 3, destination 8 }`: the car goes down to 3,
+   the landing call clears, the passenger's destination appears in
+   `Registered_Car_Call`, and the car carries on to 8.
+4. **Failure Mode - a floor the group does not serve.** The car serves floors
+   1-8. A call for floor 9, floor 0, or a destination of 9 is **refused** with
+   an Error; nothing registers and the car does not move.
+5. **Failure Mode - a faulted car.** Something blocks the doorway at a stop:
+   the door cannot close, the car raises `DOOR_CLOSING_FAULT` in
+   `Fault_Signals` (cl. 12.59.32: "A door is failing to close"), the Lift's
+   FAULT_LISTED algorithm takes it to `FAULT`, and the recipients get a
+   to-fault notification. A landing call written now is **accepted** - the
+   passenger pressed the button, it is in `Landing_Calls` - but **not
+   assigned**: `Assigned_Landing_Calls` stays empty and the car stays where it
+   is. Clear the doorway: the door closes, the fault clears, the call is
+   assigned, and the car goes.
+
+The passenger alarm (the `s` key) is reported exactly as in B-EM: a
+CHANGE_OF_STATE alarm on `Passenger_Alarm`, listed by GetEventInformation and
+acknowledged with AcknowledgeAlarm, with an ACK_NOTIFICATION to the recipients.
+Every step is printed on the console as it happens.
+
+### What is Simulation
+
+The lift car is **Simulation**: `simulation/ElevatorCar.cpp` - the same file as
+[B-EM](https://github.com/chipkin/BACnetProfileExample-B-EM-CPP)'s - stands in
+for the elevator a real B-EC drives over its own bus. It knows nothing about
+BACnet. It serves floors 1-8, moves one floor every 2 s, opens its door for 1 s,
+holds it 2 s, closes it for 1 s, runs its stops collectively, and only leaves a
+floor with its door closed and locked. Unlike B-EM there are no simulated
+passengers: the car moves only for the landing calls written to it.
+
+Everything BACnet does with the car is real: the landing-call callback sends
+it, the Lift's properties are read from it, every change goes to the stack
+with `BACnetStack_UpdateValue` (which drives COV and both event algorithms).
+
+The Wire Tests reach into the Simulation through a **test-only control
+channel** (`simulation/SimulationControl.cpp`): a loopback-only UDP socket, off
+unless `BEC_SIMULATION_CONTROL_PORT` names a port. It presses the alarm button,
+blocks the doorway and speeds the car up for a test; landing calls always come
+over BACnet. A second test-only variable, `BEC_TEST_EVENT_RECIPIENT_PORT`, adds
+the test's workstation (127.0.0.1) to Notification Class 1 as a confirmed
+recipient (`Recipient_List` is not writable in this profile). Neither is a
+command-line option. Delete `simulation/` and drive your elevator instead.
 
 ## What is a B-EC (Elevator Controller) profile?
 
@@ -66,11 +130,11 @@ Device 389013  "Chipkin Example B-EC"   (Vendor 389 - Chipkin Automation Systems
     ├── Binary Output 1            "Fuchsia"     active/inactive; commandable
     ├── Multi-State Output 1       "Indigo"      state 1..3; commandable
     ├── Network Port 1             "Vermilion"   the BACnet/IP port (required)
-    ├── Elevator Group 1           "Maroon"      groups Mauve; F-ELEVATOR; Landing_Call_Control writable (stored only)
-    ├── Lift 1                     "Mauve"       fixed car position/doors (nothing moves); simulated Passenger_Alarm -> intrinsic ChangeOfState ALARM
+    ├── Elevator Group 1           "Maroon"      groups Mauve; F-ELEVATOR; Landing_Call_Control writable - the car serves the call
+    ├── Lift 1                     "Mauve"       the (simulated) car: position, direction, door; CHANGE_OF_STATE on Passenger_Alarm, FAULT_LISTED on Fault_Signals
     ├── Escalator 1                "Mint"        not grouped (escalators aren't lifts)
     ├── Positive Integer Value 1   "Turquoise"   Maroon's Machine_Room_ID target (added before Maroon)
-    └── Notification Class 1       "Crimson"     routes Mauve's Passenger_Alarm events
+    └── Notification Class 1       "Crimson"     routes Mauve's alarm and fault events
 ```
 
 Object names follow the series' colour convention (Device is always
@@ -263,11 +327,11 @@ While the example runs, these keys are available:
 | up arrow | Increase Analog Input 1 (`Bronze`) by 1.1 (also the F-COVM demonstration). |
 | down arrow | Decrease Analog Input 1 (`Bronze`) by 1.1. |
 | `d` | Broadcast a demo Who-Is (DM-DDB-A). |
+| `s` | Simulation: press (or release) the car's passenger alarm button. |
 
-There is no key that fires the Lift's `Passenger_Alarm` - it is simulated on a
-30-second timer instead (see [TUTORIAL.md](TUTORIAL.md)). WriteProperty is
-exercised over the wire; there is no interactive key that commands a write -
-use a BACnet client.
+Landing calls and every other write are exercised over the wire; there is no
+interactive key that commands one - use a BACnet client. The console prints
+each floor the car reaches and each call it serves.
 
 ## Verify
 
@@ -281,7 +345,7 @@ Use a BACnet client such as the
    (`Chipkin Example B-EC`), the three read-only sensors, the three commandable outputs,
    the Network Port (`Vermilion`), the Elevator Group/Lift/Escalator family,
    the Positive Integer Value, and the Notification Class. Reading the
-   Device's `Object_List` returns all thirteen; `Protocol_Revision` = 24.
+   Device's `Object_List` returns all thirteen; `Protocol_Revision` = 30.
 3. **F-OUTPUTS** - WriteProperty Chartreuse's `Present_Value` at a priority,
    confirm the readback, relinquish (WriteProperty NULL), confirm it falls
    back to `Relinquish_Default` (20.0). WriteProperty Fuchsia to `active`,
@@ -291,9 +355,10 @@ Use a BACnet client such as the
 4. **F-COVM** - SubscribeCOVPropertyMultiple naming Analog Input 1 (Bronze)'s
    `Present_Value` AND `Status_Flags`. A plain SubscribeCOV also still works.
 5. **F-ELEVATOR** - ReadProperty every required property of Maroon/Mauve/Mint;
-   WriteProperty a landing call to Maroon's `Landing_Call_Control` and confirm
-   it reads back (before any write it reads floor 0, direction `none`). The
-   car does not move in response.
+   WriteProperty a landing call to Maroon's `Landing_Call_Control` (before any
+   write it reads floor 0, direction `none`), e.g. floor 6, direction down
+   (`09 06 19 04`). Watch `Landing_Calls`, then Mauve's `Car_Position` climb to
+   6 and the call clear. A call for floor 9 is refused.
 6. **DM-TS-B** - TimeSynchronization to an arbitrary date/time; confirm
    `Local_Date`/`Local_Time` read back the commanded value.
 7. **DM-RD-B** - ReinitializeDevice COLDSTART; confirm a SimpleAck and that
@@ -303,33 +368,40 @@ Use a BACnet client such as the
    the Notification Class (Crimson) is rejected: AE-CRL-B is not a required
    BIBB for this profile.
 
-**What has been checked on the wire, and how.** The Wire Tests below (steps 1
-and 2) run in CI. The rest of this list was checked by hand in earlier
-sessions and is not reproducible from this repository yet. One exception: on
-2026-10-15 a raw-encoded WriteProperty of `Landing_Call_Control` (floor 7,
-direction up: `09 07 19 03`) was answered with a SimpleACK and read back
-unchanged - the write path the earlier session could not encode with its test
-client. That check is manual too; it is not yet a Wire Test.
+**What has been checked on the wire, and how.** The Wire Tests below cover
+steps 1-3 and 5 (and the alarm), in CI. Steps 4 (Bronze's COV), 6-9 were
+checked by hand in earlier sessions and are not yet reproducible from this
+repository.
 
 For a property-by-property review against the conformance statement, see
 [TUTORIAL.md](TUTORIAL.md).
 
 ## Wire Tests
 
-Steps 1 and 2 above, automated: a Python BACnet client drives the running
-example over BACnet/IP from outside it, the way a client discovers a device -
-Who-Is, the Device's `Object_List`, then for every object its `Property_List`
-and a ReadProperty of every property it lists. Every read must come back as a
-value; an Error, Reject or Abort fails the run. Python 3 standard library only:
+The scenario above, automated. Python clients - the Peers: a landing-call
+panel, an operator workstation that is also Crimson's event recipient, a COV
+subscriber - drive the running example over BACnet/IP from outside it. The
+landing calls are raw-encoded BACnetLandingCallStatus values
+(`tests/landing_call.py`). Python 3 standard library only:
 
 ```bash
 python3 tests/run_wire_tests.py --exe build/BACnetExampleBEC          # Linux/macOS
 python tests\run_wire_tests.py --exe build\Release\BACnetExampleBEC.exe   # Windows
 ```
 
-It ends with `ALL WIRE TESTS PASSED` (exit 0). CI runs it on Linux after the
-smoke test. [tests/README.md](tests/README.md) says what each check proves. It
-does not yet cover writes, COV, alarming, time synchronization or restart.
+| Script | Proves |
+|---|---|
+| `discovery_test.py` | every object and every property it lists reads as a value |
+| `landing_call_test.py` | the Profile Function: a landing call (direction, then destination) is served - the car travels, opens, the call clears |
+| `landing_call_failure_test.py` | Failure Modes: unserved floors refused; a faulted car (`DOOR_CLOSING_FAULT`, FAULT_LISTED) holds its calls unassigned, then serves them |
+| `passenger_alarm_test.py` | the passenger alarm reported, listed, acknowledged (with ACK_NOTIFICATION); the car's status refuses writes |
+| `outputs_test.py` | the commandable outputs arbitrate priorities; an out-of-range state is refused |
+
+It ends with `ALL WIRE TESTS PASSED` (exit 0), in about a minute and a half.
+Ports: `--port` (default 48035) and `--port + 1` for the control channel. CI
+runs it on Linux after the smoke test. [tests/README.md](tests/README.md) says
+what each check proves and which mutation of `main.cpp` makes it fail. Time
+synchronization and restart are not yet covered.
 
 
 ## The BACnet profile example series

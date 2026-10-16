@@ -69,13 +69,22 @@ set(COMMON_SOURCES
     "${EXAMPLES_COMMON_DIR}/CASExampleHelper.cpp"
     "${EXAMPLES_COMMON_DIR}/SimpleUDP.cpp")
 
+# --- The elevator Simulation (README "What is Simulation") -------------------
+# The lift car the controller runs, and the Wire Tests' test-only control
+# channel. Not BACnet; a real product drives its elevator instead.
+set(SIMULATION_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/simulation/ElevatorCar.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/simulation/SimulationControl.cpp")
+
 # --- The executable ---------------------------------------------------------
 add_executable(BACnetExampleBEC
     main.cpp
-    ${COMMON_SOURCES})
+    ${COMMON_SOURCES}
+    ${SIMULATION_SOURCES})
 
 target_include_directories(BACnetExampleBEC PRIVATE
-    "${EXAMPLES_COMMON_DIR}")
+    "${EXAMPLES_COMMON_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/simulation")
 
 target_link_libraries(BACnetExampleBEC PRIVATE CASBACnetStack::Adapter)
 
@@ -88,7 +97,7 @@ if(MSVC)
 else()
     set(EXAMPLE_WARNINGS "-Wall;-Wextra")
 endif()
-set_source_files_properties(main.cpp ${COMMON_SOURCES}
+set_source_files_properties(main.cpp ${COMMON_SOURCES} ${SIMULATION_SOURCES}
     PROPERTIES COMPILE_OPTIONS "${EXAMPLE_WARNINGS}")
 
 # --- Platform sockets -------------------------------------------------------

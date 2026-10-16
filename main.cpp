@@ -12,7 +12,7 @@
 // a landing call on the Elevator Group, TimeSynchronization, and
 // ReinitializeDevice.
 //
-// A B-EC (ANSI/ASHRAE 135, Annex L.14) must support:
+// A B-EC (ANSI/ASHRAE 135, Annex L.13.2) must support:
 //
 //     DS-RP-B, DS-RPM-B       - ReadProperty + ReadPropertyMultiple,
 //     DS-WP-B, DS-WPM-B       - WriteProperty + WritePropertyMultiple (NEW vs B-EM),
@@ -54,10 +54,12 @@
 // Landing_Call_Control property, which B-EM deliberately leaves out (see its
 // file header). This example registers
 // BACnetStack_RegisterCallbackSetElevatorGroupLandingCallControl, so a
-// WriteProperty naming a floor/direction/door is accepted - the "controller"
-// half of "Elevator Controller". The call is only RECORDED: nothing in this
-// example moves the car (Car_Position stays at floor 3) - a real installation
-// forwards it to the elevator. It is read back through the SAME GetListElevatorGroupLandingCallStatus callback
+// WriteProperty naming a floor and a direction (or a destination) is accepted -
+// the "controller" half of "Elevator Controller" - and SERVED: the simulated car
+// (simulation/ElevatorCar.cpp, the same one B-EM monitors) travels to the floor,
+// opens its door, and the call leaves Landing_Calls. A call to a floor the car
+// does not serve is refused; a call while the car is faulted waits, unassigned.
+// The last call is read back through the SAME GetListElevatorGroupLandingCallStatus callback
 // B-EM registered, now also serving LandingCallControl (distinguished from
 // LandingCalls by the propertyIdentifier parameter, which B-EM's read-only
 // version ignored because it only ever answered LandingCalls).
@@ -77,18 +79,20 @@
 //     Network Port 1             "Vermilion"    (the BACnet/IP port - required)
 //     Elevator Group 1           "Maroon"       (groups Mauve; a group of Lifts;
 //                                                Landing_Call_Control now writable)
-//     Lift 1                     "Mauve"        (fixed car position and doors - nothing moves;
-//                                                   simulated passenger alarm; intrinsic alarming)
+//     Lift 1                     "Mauve"        (the SIMULATED car: position, direction, door;
+//                                                CHANGE_OF_STATE on Passenger_Alarm,
+//                                                FAULT_LISTED on Fault_Signals)
 //     Escalator 1                "Mint"         (not part of the Elevator Group - escalators
 //                                                aren't lifts, so it uses the "no reference" sentinel)
 //     Positive Integer Value 1   "Turquoise"    (the Elevator Group's Machine_Room_ID target -
 //                                                must be added BEFORE the Elevator Group, below)
-//     Notification Class 1       "Crimson"      (routes Mauve's Passenger_Alarm events)
+//     Notification Class 1       "Crimson"      (routes Mauve's alarm and fault events)
 //
-// ALARMING: unchanged from B-EM. Lift 1 ("Mauve") arms an intrinsic ChangeOfState
-// (boolean) algorithm on its Passenger_Alarm property, simulated on a 30-second
-// timer (Passenger_Alarm is not writable through any API - it reflects a
-// physical alarm button in the car).
+// ALARMING: as B-EM. Lift 1 ("Mauve") arms the two algorithms cl. 12.59 names:
+// CHANGE_OF_STATE on Passenger_Alarm (the car's alarm button - the 's' key or the
+// test-only control channel; it is not writable through any API) and FAULT_LISTED
+// on Fault_Signals (the simulated car raises DOOR_CLOSING_FAULT when its door
+// cannot close). Both notify Notification Class 1 ("Crimson")'s recipients.
 //
 // COVM: unchanged from B-EM. Analog Input 1 ("Bronze") has both its Present_Value
 // and Status_Flags marked subscribable.
@@ -111,24 +115,35 @@
 // Interactive keys (handled by the shared helper): h = help, q = quit,
 // up/down = nudge Analog Input 1 by +/-1.1 (also the F-COVM demonstration), d =
 // DM-DDB-A: broadcast a demo Who-Is on demand (see docs/menu-keys.md - the same
-// key B-LS claims for its own remote-discovery demo). There is no key to fire
-// the Lift's Passenger_Alarm alarm - it is simulated on a 30-second timer
-// instead. Command line: --port <n>, --deviceID <n>.
+// key B-LS claims for its own remote-discovery demo), s = press/release the
+// car's passenger alarm button (Simulation). Command line: --port <n>,
+// --deviceID <n>. The Wire Tests use two TEST-ONLY environment variables,
+// BEC_SIMULATION_CONTROL_PORT and BEC_TEST_EVENT_RECIPIENT_PORT (README "What is
+// Simulation").
 //
 // All the UDP/stack plumbing lives in common/CASExampleHelper so this file can
 // stay focused on the BACnet logic.
 // =============================================================================
+
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS // sscanf (%15s, bounded) / getenv in the test-only Simulation hooks: C4996 is noise
+#endif
 
 #include "CASExampleHelper.h"
 #include "CASBACnetStackExampleConstants.h"
 #include "CASBACnetStackAdapter.h" // the CAS BACnet Stack C API (BACnetStack_*); call
                                     // LoadBACnetFunctions() before any BACnetStack_* call -
                                     // see the top of main() below.
+#include "ElevatorCar.h"            // SIMULATION: the lift car this controller runs
+#include "SimulationControl.h"      // SIMULATION, TEST ONLY: the Wire Tests' hands on it
 
+#include <chrono> // steady_clock - the car Simulation's clock
 #include <stdio.h>
+#include <stdlib.h> // getenv, strtol - the test-only event recipient
 #include <string.h>
 #include <string>
-#include <time.h> // time() - the Passenger_Alarm simulation timer
+#include <time.h> // time() - F-TIMESYNC's host clock
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h> // Sleep()
@@ -142,7 +157,7 @@ using namespace CASBACnetStackExampleConstants;
 // 1. Example + device configuration
 // -----------------------------------------------------------------------------
 static const char* APP_NAME = "BACnet B-EC (Elevator Controller) Example - C++";
-static const char* APP_VERSION = "1.1.0";
+static const char* APP_VERSION = "1.2.0";
 
 // The device instance. BACnet requires this to be configurable, so it defaults
 // to 389013 and can be overridden on the command line with --deviceID. Keep it
@@ -343,15 +358,29 @@ static const uint32_t PROPERTY_IDENTIFIER_PASSENGER_ALARM = 478;
 static const uint32_t PROPERTY_IDENTIFIER_POWER_MODE = 479;
 static const uint32_t PROPERTY_IDENTIFIER_REGISTERED_CAR_CALL = 480;
 
+static const uint32_t PROPERTY_IDENTIFIER_RELIABILITY = 103;
+static const uint32_t PROPERTY_IDENTIFIER_NUMBER_OF_APDU_RETRIES = 73;
+static const uint32_t NUMBER_OF_APDU_RETRIES = 3; // see GetPropertyUnsignedInteger
+
 // BACnetLiftCarDirectionEnum (BACnetLiftCarDirection.h)
 static const uint32_t LIFT_CAR_DIRECTION_NONE = 1;
+static const uint32_t LIFT_CAR_DIRECTION_STOPPED = 2;
 static const uint32_t LIFT_CAR_DIRECTION_UP = 3;
+static const uint32_t LIFT_CAR_DIRECTION_DOWN = 4;
+static const uint32_t LIFT_CAR_DIRECTION_UP_AND_DOWN = 5;
 // BACnetLandingCallStatus's command CHOICE, as the landing-call callbacks pass it
 // (BACnetLandingCallStatus.h): 1 = direction, 2 = destination.
 static const uint8_t LANDING_CALL_COMMAND_DIRECTION = 1;
+static const uint8_t LANDING_CALL_COMMAND_DESTINATION = 2;
 // BACnetDoorStatusEnum (BACnetDoorStatus.h) - shared with Access Door / the Lift's
 // per-door Car_Door_Status and Landing_Door_Status arrays.
 static const uint32_t DOOR_STATUS_CLOSED = 0;
+static const uint32_t DOOR_STATUS_OPENED = 1;
+static const uint32_t DOOR_STATUS_CLOSING = 6;
+static const uint32_t DOOR_STATUS_OPENING = 7;
+static const uint32_t DOOR_STATUS_SAFETY_LOCKED = 8;
+// BACnetLiftFaultEnum (BACnetLiftFault.h) - the Fault_Signals values (cl. 12.59.32).
+static const uint32_t LIFT_FAULT_DOOR_CLOSING_FAULT = 6;
 // BACnetLiftGroupModeEnum (BACnetLiftGroupMode.h)
 static const uint32_t LIFT_GROUP_MODE_NORMAL = 1;
 // BACnetEscalatorOperationDirectionEnum (BACnetEscalatorOperationDirection.h)
@@ -379,27 +408,38 @@ static const uint32_t MACHINE_ROOM_ID_INSTANCE = 1;      // "Turquoise"
 static const uint32_t MACHINE_ROOM_ID_VALUE = 100;        // an arbitrary plausible room id
 static const uint32_t LIFT_NUMBER_OF_DOORS = 1;            // this Lift has one door (index 1)
 
-// Simulated Lift state (a real device would read this from the elevator
-// controller's own bus). Car_Position is a floor number (1-based); the car sits
-// at floor 3, doors closed, not moving.
-static const uint8_t LIFT_CAR_POSITION = 3;
+// --- SIMULATION: the lift car this controller runs (simulation/ElevatorCar.h) --
+// A real B-EC drives its elevator over the elevator's own bus; here a simulated
+// car stands in for it - the same one B-EM monitors. It serves universal floors
+// 1..8 one floor at a time at a set speed, opens and closes its door at each
+// stop, and can be obstructed into a DOOR_CLOSING_FAULT. Unlike B-EM there are
+// no simulated passengers: the car moves only for the landing calls a BACnet
+// client writes to Landing_Call_Control (and the test-only "call" command).
+static const uint8_t LIFT_LOWEST_FLOOR = 1;
+static const uint8_t LIFT_HIGHEST_FLOOR = 8;
+static ElevatorSimulation::Car g_car(LIFT_LOWEST_FLOOR, LIFT_HIGHEST_FLOOR, LIFT_LOWEST_FLOOR);
+
 static bool g_liftOutOfService = false;
 // The alarm source: Passenger_Alarm is not writable through any API in this
-// stack (a real installation drives it from hardware) - see the file header
-// comment for how this example simulates it on a timer instead of a key/write.
+// stack (a real installation drives it from the car's alarm button). In this
+// example the button is pressed with the 's' key or through the test-only
+// simulation control channel ("alarm on" / "alarm off").
 static bool g_liftPassengerAlarm = false;
 
 static bool g_escalatorOutOfService = false;
 static bool g_escalatorPassengerAlarm = false;
 static bool g_escalatorPowerMode = true; // powered on
 
-// --- NEW vs B-EM: Elevator Group 1 "Maroon"'s Landing_Call_Control -----------
-// The one queued/commanded landing call this example remembers, so a read of
-// Landing_Call_Control (or Landing_Calls) after a WriteProperty reflects what was
-// last commanded. A real installation would forward the call to its elevator
-// controller instead of just remembering it. hasQueuedCall=false means "no call
-// commanded (or its door was answered) right now"; Landing_Call_Control then
-// reads as floor 0, direction none (see GetListElevatorGroupLandingCallStatus).
+// --- NEW vs B-EM: Elevator Group 1 "Maroon"'s landing calls ---------------------
+// 135-2024 cl. 12.58.10: "A write to this property is equivalent to a passenger
+// pressing a call button at a landing, indicating either desired direction of
+// travel or destination floor." g_queuedLandingCall is the last call written,
+// what Landing_Call_Control reads back (floor 0, direction none before any).
+// g_landingCalls is the group's active calls - cl. 12.58.9 Landing_Calls: "Each
+// element of this list shall represent a currently active call for the group of
+// lifts". Each one is a stop the car has been sent to; it leaves the list the
+// moment the car stops at that floor (RunLandingCalls). A destination call then
+// becomes a car call to its destination floor.
 struct QueuedLandingCall {
     bool hasQueuedCall = false;
     uint8_t floorNumber = 0;
@@ -408,12 +448,13 @@ struct QueuedLandingCall {
     uint8_t destination = 0;
 };
 static QueuedLandingCall g_queuedLandingCall;
+static std::vector<QueuedLandingCall> g_landingCalls;
 
 // --- AE-N-I-B: Notification Class 1 "Crimson" routes Mauve's Passenger_Alarm --
 static const uint32_t NOTIFICATION_CLASS_INSTANCE = 1;     // "Crimson"
-// Notification priorities for the three transitions (lower = more urgent). The
-// to-fault priority is supplied for completeness, but this example's
-// ChangeOfState algorithm has no fault source, so to-fault is left disabled below.
+// Notification priorities for the three transitions (lower = more urgent).
+// To-fault is Mauve's FAULT_LISTED fault algorithm on Fault_Signals (cl. 12.59:
+// "For reliability-evaluation, the FAULT_LISTED fault algorithm can be applied").
 static const uint8_t NC_PRIORITY_TO_OFFNORMAL = 100;
 static const uint8_t NC_PRIORITY_TO_FAULT = 50;
 static const uint8_t NC_PRIORITY_TO_NORMAL = 200;
@@ -429,9 +470,53 @@ static const uint32_t RECIPIENT_PROCESS_IDENTIFIER = 1;
 static const bool RECIPIENT_USE_BROADCAST = true;
 static uint8_t RECIPIENT_IP[4] = { 0, 0, 0, 0 };  // used when not broadcasting
 
-// How often (seconds of uptime) the simulated Passenger_Alarm condition flips.
-// A real device would drive g_liftPassengerAlarm from an actual alarm input.
-static const time_t PASSENGER_ALARM_SIMULATION_PERIOD_SECONDS = 30;
+// TEST ONLY: when this environment variable holds a UDP port, Crimson gets a
+// SECOND recipient, 127.0.0.1:<port>, sent CONFIRMED notifications - the Wire
+// Tests' operator workstation (tests/). This profile's Recipient_List is not
+// writable (AE-CRL-B is not one of its BIBBs), so the tests cannot add it over BACnet.
+static const char* TEST_EVENT_RECIPIENT_PORT_VARIABLE = "BEC_TEST_EVENT_RECIPIENT_PORT";
+static const uint32_t TEST_RECIPIENT_PROCESS_IDENTIFIER = 2;
+// TEST ONLY: the simulation control channel (simulation/SimulationControl.h).
+static const char* SIMULATION_CONTROL_PORT_VARIABLE = "BEC_SIMULATION_CONTROL_PORT";
+
+// The simulated car's state, in BACnet's terms (cl. 12.59.15 Car_Moving_Direction,
+// 12.59.17 Car_Door_Status). A car standing at a floor with its door shut is
+// CLOSED ("fully closed but not yet locked"); the door locks before the car
+// moves, so a moving car always reports SAFETY_LOCKED.
+static uint32_t CarMovingDirection() {
+    switch (g_car.MovingDirection()) {
+        case ElevatorSimulation::Direction::Up:   return LIFT_CAR_DIRECTION_UP;
+        case ElevatorSimulation::Direction::Down: return LIFT_CAR_DIRECTION_DOWN;
+        default:                                  return LIFT_CAR_DIRECTION_STOPPED;
+    }
+}
+
+static uint32_t CarDoorStatus() {
+    switch (g_car.DoorState()) {
+        case ElevatorSimulation::Door::Locked:  return DOOR_STATUS_SAFETY_LOCKED;
+        case ElevatorSimulation::Door::Opening: return DOOR_STATUS_OPENING;
+        case ElevatorSimulation::Door::Opened:  return DOOR_STATUS_OPENED;
+        case ElevatorSimulation::Door::Closing: return DOOR_STATUS_CLOSING;
+        default:                                return DOOR_STATUS_CLOSED;
+    }
+}
+
+static uint32_t LiftFaultSignal(ElevatorSimulation::Fault fault) {
+    switch (fault) {
+        case ElevatorSimulation::Fault::DoorClosing:
+        default:
+            return LIFT_FAULT_DOOR_CLOSING_FAULT;
+    }
+}
+
+static bool IsLandingCallFloor(uint8_t floor) {
+    for (const QueuedLandingCall& call : g_landingCalls) {
+        if (call.floorNumber == floor) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // -----------------------------------------------------------------------------
 // 2. Property "get" callbacks
@@ -583,7 +668,7 @@ bool GetPropertyEnumerated(const uint32_t deviceInstance, const uint16_t objectT
     if (objectType == OBJECT_TYPE_LIFT && objectInstance == LIFT_INSTANCE) {
         if (propertyIdentifier == PROPERTY_IDENTIFIER_CAR_MOVING_DIRECTION) {
             // Required, NO STACK DEFAULT - an unserved read fails value-not-initialized.
-            *value = LIFT_CAR_DIRECTION_UP;
+            *value = CarMovingDirection();
             return true;
         }
         if (propertyIdentifier == PROPERTY_IDENTIFIER_CAR_DOOR_STATUS &&
@@ -592,7 +677,7 @@ bool GetPropertyEnumerated(const uint32_t deviceInstance, const uint16_t objectT
             // "THE DOOR COUNT IS NOT STORED BY THE STACK" note in
             // CASBACnetStackDLL.h: the application alone owns the door count,
             // by simply answering only door indices it recognises).
-            *value = DOOR_STATUS_CLOSED;
+            *value = CarDoorStatus();
             return true;
         }
     }
@@ -645,6 +730,18 @@ bool GetPropertyUnsignedInteger(const uint32_t deviceInstance, const uint16_t ob
         *value = VENDOR_IDENTIFIER;
         return true;
     }
+    if (objectType == OBJECT_TYPE_DEVICE && objectInstance == g_deviceInstance &&
+        propertyIdentifier == PROPERTY_IDENTIFIER_NUMBER_OF_APDU_RETRIES) {
+        // The stack retries a confirmed request (a ConfirmedEventNotification) this
+        // many times, APDU_Timeout apart. Served by nobody it reads 0 - 135-2024
+        // 12.11.29: "If this device does not perform retries, then this property
+        // shall be set to zero" - and a recipient that missed one datagram never gets
+        // the alarm. 3 is the clause's suggested default. (APDU_Timeout is left to the
+        // stack: 10000 ms, cl. 12.11.28's default for a device that does not let it be
+        // modified.)
+        *value = NUMBER_OF_APDU_RETRIES;
+        return true;
+    }
     if (objectType == OBJECT_TYPE_NETWORK_PORT && objectInstance == NETWORK_PORT_INSTANCE) {
         if (propertyIdentifier == PROPERTY_IDENTIFIER_APDU_LENGTH) {
             *value = MAX_APDU_LENGTH;
@@ -663,8 +760,8 @@ bool GetPropertyUnsignedInteger(const uint32_t deviceInstance, const uint16_t ob
     // --- F-ELEVATOR ----------------------------------------------------------
     if (objectType == OBJECT_TYPE_LIFT && objectInstance == LIFT_INSTANCE &&
         propertyIdentifier == PROPERTY_IDENTIFIER_CAR_POSITION) {
-        // Required, NO STACK DEFAULT.
-        *value = LIFT_CAR_POSITION;
+        // Required, NO STACK DEFAULT. The universal floor number of the car (cl. 12.59.14).
+        *value = g_car.Position();
         return true;
     }
     // Every one of the Lift's per-door BACnetARRAY properties (required
@@ -955,23 +1052,30 @@ bool GetPropertyCharString(const uint32_t deviceInstance, const uint16_t objectT
 // B-EM, the read-only monitor this example seeds from, leaves it out.
 // -----------------------------------------------------------------------------
 
-// FaultSignals (required on the Lift) - a list of active fault enumerations.
-// A healthy Lift reports an empty list; this example never simulates a fault.
+// FaultSignals (required on the Lift) - the car's active faults (cl. 12.59.32),
+// one BACnetLiftFault per call. It is also the pMonitoredList of Mauve's
+// FAULT_LISTED fault algorithm: when it is not empty the stack takes Reliability
+// to FAULTS_LISTED and Event_State to FAULT, and sends the to-fault notification.
+// The stack pages with rangeIndexOrSequenceNumber as a 0-based counter (see
+// BACnetStack_RegisterCallbackGetListOfEnumerations). An EMPTY list is answered
+// with true and the enumeration left untouched: the stack's sentinel skips it.
 bool GetListOfEnumerations(const uint32_t deviceInstance, const uint16_t objectType,
                            const uint32_t objectInstance, const uint32_t propertyIdentifier,
                            const uint8_t rangeOption, const uint32_t rangeIndexOrSequenceNumber,
                            const bool rangeInPositiveDirection, uint32_t* enumeration, bool* more) {
     (void)rangeOption;
-    (void)rangeIndexOrSequenceNumber;
     (void)rangeInPositiveDirection;
-    (void)enumeration;
     if (deviceInstance != g_deviceInstance) {
         *more = false;
         return false;
     }
     if (objectType == OBJECT_TYPE_LIFT && objectInstance == LIFT_INSTANCE &&
         propertyIdentifier == PROPERTY_IDENTIFIER_FAULT_SIGNALS) {
-        *more = false; // no active faults
+        const std::vector<ElevatorSimulation::Fault>& faults = g_car.Faults();
+        if (rangeIndexOrSequenceNumber < faults.size()) {
+            *enumeration = LiftFaultSignal(faults[rangeIndexOrSequenceNumber]);
+        }
+        *more = rangeIndexOrSequenceNumber + 1 < faults.size();
         return true;
     }
     *more = false;
@@ -984,13 +1088,13 @@ bool GetListOfEnumerations(const uint32_t deviceInstance, const uint16_t objectT
 //
 //   Landing_Call_Control (NEW vs B-EM) is ONE BACnetLandingCallStatus, not a
 //   list, so it must always have a value: the call SetElevatorGroupLandingCallControl
-//   (below) last recorded, or - before any call, or after a COLDSTART - floor 0,
+//   (below) last accepted, or - before any call, or after a COLDSTART - floor 0,
 //   direction none. Returning false here fails the read with READ_ACCESS_DENIED.
 //
-//   Landing_Calls (the group's own queue, as opposed to what was just commanded)
-//   stays empty in this example. The callback's contract (BACnetCallbackInterface.h):
-//   return true only when it supplied an element, and false on the first call
-//   (rangeIndexOrSequence 0) for an EMPTY list. Returning true without an
+//   Landing_Calls is the group's active calls (g_landingCalls), one per call,
+//   paged by rangeIndexOrSequence counting from 0. The callback's contract
+//   (BACnetCallbackInterface.h): return true only when it supplied an element,
+//   and false on the first call for an EMPTY list. Returning true without an
 //   element is read as a malformed element and fails the read.
 bool GetListElevatorGroupLandingCallStatus(const uint32_t deviceInstance, const uint32_t elevatorGroupInstance,
                                            const uint32_t propertyIdentifier, const uint8_t rangeOption,
@@ -1000,7 +1104,6 @@ bool GetListElevatorGroupLandingCallStatus(const uint32_t deviceInstance, const 
                                            uint32_t* floorTextLength, const uint32_t floorTextMaxLength,
                                            bool* more) {
     (void)rangeOption;
-    (void)rangeIndexOrSequence; // one value or an empty list: no paging needed
     (void)floorText;
     (void)floorTextLength;
     (void)floorTextMaxLength;
@@ -1008,6 +1111,7 @@ bool GetListElevatorGroupLandingCallStatus(const uint32_t deviceInstance, const 
         *more = false;
         return false;
     }
+    *useFloorText = false;
     if (propertyIdentifier == PROPERTY_IDENTIFIER_LANDING_CALL_CONTROL) {
         if (g_queuedLandingCall.hasQueuedCall) {
             *floorNumber = g_queuedLandingCall.floorNumber;
@@ -1020,73 +1124,89 @@ bool GetListElevatorGroupLandingCallStatus(const uint32_t deviceInstance, const 
             *bacnetLiftCarDirection = LIFT_CAR_DIRECTION_NONE;
             *destination = 0;
         }
-        *useFloorText = false;
         *more = false; // a single value, not a list
         return true;
     }
-    *more = false;
-    return false; // Landing_Calls: no landing calls outstanding right now - an empty list
+    if (rangeIndexOrSequence >= g_landingCalls.size()) {
+        *more = false;
+        return false; // no element here (false at index 0 = no landing calls outstanding)
+    }
+    const QueuedLandingCall& call = g_landingCalls[rangeIndexOrSequence];
+    *floorNumber = call.floorNumber;
+    *commandChoice = call.commandChoice;
+    *bacnetLiftCarDirection = call.direction;
+    *destination = call.destination;
+    *more = rangeIndexOrSequence + 1 < g_landingCalls.size();
+    return true;
 }
 
-// AssignedLandingCalls (optional Lift property, enabled below) - the calls this
-// car has been assigned to answer. Report one, for demonstration: the car is
-// assigned to floor 5, direction up.
+// AssignedLandingCalls (optional Lift property, enabled below) - "the current
+// landing calls and their direction for the lift represented by this object"
+// (cl. 12.59.11). Mauve is the group's only car, so the group assigns every
+// active landing call to it - while it is able to serve them. A faulted car is
+// assigned nothing: its calls stay in Maroon's Landing_Calls, unassigned, until
+// it recovers. A destination call has no direction; it is reported as the way
+// the car must travel from the call's floor to its destination.
 bool GetSequenceLiftAssignedLandingCall(const uint32_t deviceInstance, const uint32_t objectInstance,
                                         const uint32_t arrayIndexForDoor, const uint32_t offset,
                                         uint8_t* floorNumber, uint32_t* direction, bool* more) {
     if (deviceInstance != g_deviceInstance || objectInstance != LIFT_INSTANCE ||
-        arrayIndexForDoor != 1 /* this Lift's one door */) {
+        arrayIndexForDoor != 1 /* this Lift's one door */ || g_car.Faulted() || offset >= g_landingCalls.size()) {
         *more = false;
-        return false;
+        return false; // no element at this offset (false at offset 0 = an empty list)
     }
-    if (offset == 0) {
-        *floorNumber = 5;
-        *direction = LIFT_CAR_DIRECTION_UP;
-        *more = false; // exactly one assigned call
-        return true;
+    const QueuedLandingCall& call = g_landingCalls[offset];
+    *floorNumber = call.floorNumber;
+    if (call.commandChoice == LANDING_CALL_COMMAND_DESTINATION) {
+        *direction = call.destination > call.floorNumber ? LIFT_CAR_DIRECTION_UP : LIFT_CAR_DIRECTION_DOWN;
+    } else {
+        *direction = call.direction;
     }
-    *more = false;
-    return false;
+    *more = offset + 1 < g_landingCalls.size();
+    return true;
 }
 
-// RegisteredCarCall (optional Lift property, enabled below) - the floor(s) a
-// passenger has pressed inside the car. Report one, for demonstration: floor 5.
+// RegisteredCarCall (optional Lift property, enabled below) - the floors
+// passengers have pressed inside the car (cl. 12.59.13): the car's pending stops
+// that are not landing calls - a destination call's destination, or the
+// test-only "call" command. A stop leaves the list the moment the car stops there.
 bool GetSequenceLiftRegisteredCarCall(const uint32_t deviceInstance, const uint32_t objectInstance,
                                       const uint32_t arrayIndexForDoor, const uint32_t offset,
                                       uint8_t* floorNumber, bool* more) {
+    std::vector<uint8_t> carCalls;
+    for (uint8_t stop : g_car.PendingStops()) {
+        if (!IsLandingCallFloor(stop)) {
+            carCalls.push_back(stop);
+        }
+    }
     if (deviceInstance != g_deviceInstance || objectInstance != LIFT_INSTANCE ||
-        arrayIndexForDoor != 1) {
+        arrayIndexForDoor != 1 || offset >= carCalls.size()) {
         *more = false;
         return false;
     }
-    if (offset == 0) {
-        *floorNumber = 5;
-        *more = false; // exactly one registered car call
-        return true;
-    }
-    *more = false;
-    return false;
+    *floorNumber = carCalls[offset];
+    *more = offset + 1 < carCalls.size();
+    return true;
 }
 
-// LandingDoorStatus (optional Lift property, enabled below) - the door status at
-// each floor the car serves. Report one, for demonstration: floor 3 (where the
-// car currently sits), door closed.
+// LandingDoorStatus (optional Lift property, enabled below) - the landing doors
+// on the floors this car serves (cl. 12.59.33). Landing doors are driven by the
+// car door (cl. 12.59: "the status of a lift car door also reflects the status
+// of the corresponding landing door at a particular floor"), so the landing door
+// at the car's floor follows the car door and every other one is SAFETY_LOCKED.
 bool GetSequenceLiftLandingDoorStatus(const uint32_t deviceInstance, const uint32_t objectInstance,
                                       const uint32_t arrayIndexForDoor, const uint32_t offset,
                                       uint8_t* floorNumber, uint32_t* doorStatus, bool* more) {
+    const uint32_t floorCount = (uint32_t)(LIFT_HIGHEST_FLOOR - LIFT_LOWEST_FLOOR + 1);
     if (deviceInstance != g_deviceInstance || objectInstance != LIFT_INSTANCE ||
-        arrayIndexForDoor != 1) {
+        arrayIndexForDoor != 1 || offset >= floorCount) {
         *more = false;
         return false;
     }
-    if (offset == 0) {
-        *floorNumber = LIFT_CAR_POSITION;
-        *doorStatus = DOOR_STATUS_CLOSED;
-        *more = false; // exactly one landing-door status entry reported
-        return true;
-    }
-    *more = false;
-    return false;
+    *floorNumber = (uint8_t)(LIFT_LOWEST_FLOOR + offset);
+    *doorStatus = (*floorNumber == g_car.Position()) ? CarDoorStatus() : DOOR_STATUS_SAFETY_LOCKED;
+    *more = offset + 1 < floorCount;
+    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -1095,10 +1215,15 @@ bool GetSequenceLiftLandingDoorStatus(const uint32_t deviceInstance, const uint3
 // Elevator Group has no Landing_Call_Control at all (see its file header).
 // Registering it here is what turns this device from a monitor into a
 // controller: the stack decodes the WriteProperty's BACnetLandingCallStatus
-// SEQUENCE and hands us the fields; we just remember the last one (a real
-// installation would forward it to the elevator controller's own bus). Reads of
-// Landing_Call_Control afterward come back through
-// GetListElevatorGroupLandingCallStatus above.
+// SEQUENCE and hands us the fields, and the call is SERVED - the car is sent to
+// the floor, opens its door there, and the call clears (RunLandingCalls).
+//
+// FAILURE MODE: a call to a floor this group's car does not serve (anything
+// outside floors 1..8, including floor 0) is refused: the callback returns false
+// and the WriteProperty is answered with an Error. This callback has no errorCode
+// out-parameter, so the error class/code is the stack's choice (TODO.md).
+// A call while the car is faulted is accepted: the passenger's call registers in
+// Landing_Calls, but it is not assigned to the car until the car recovers.
 // -----------------------------------------------------------------------------
 bool SetElevatorGroupLandingCallControl(const uint32_t deviceInstance, const uint32_t elevatorGroupInstance,
                                         const uint8_t floorNumber, const uint8_t commandChoice,
@@ -1111,13 +1236,31 @@ bool SetElevatorGroupLandingCallControl(const uint32_t deviceInstance, const uin
     if (deviceInstance != g_deviceInstance || elevatorGroupInstance != ELEVATOR_GROUP_INSTANCE) {
         return false;
     }
+    const bool destinationCall = commandChoice == LANDING_CALL_COMMAND_DESTINATION;
+    const bool directionValid = bacnetLiftCarDirection == LIFT_CAR_DIRECTION_UP ||
+                                bacnetLiftCarDirection == LIFT_CAR_DIRECTION_DOWN ||
+                                bacnetLiftCarDirection == LIFT_CAR_DIRECTION_UP_AND_DOWN;
+    if (!g_car.Serves(floorNumber) || (destinationCall && (!g_car.Serves(destination) || destination == floorNumber)) ||
+        (!destinationCall && !directionValid)) {
+        printf("WriteProperty: Elevator Group 1 (Maroon) Landing_Call_Control REFUSED - floor %u%s is not "
+               "served by this group (floors %u..%u)\n", floorNumber, destinationCall ? " / destination" : "",
+               LIFT_LOWEST_FLOOR, LIFT_HIGHEST_FLOOR);
+        return false;
+    }
     g_queuedLandingCall.hasQueuedCall = true;
     g_queuedLandingCall.floorNumber = floorNumber;
     g_queuedLandingCall.commandChoice = commandChoice;
-    g_queuedLandingCall.direction = bacnetLiftCarDirection;
-    g_queuedLandingCall.destination = destination;
-    printf("WriteProperty: Elevator Group 1 (Maroon) Landing_Call_Control <- floor %u, "
-           "direction %u, door %u\n", floorNumber, bacnetLiftCarDirection, destination);
+    g_queuedLandingCall.direction = destinationCall ? LIFT_CAR_DIRECTION_NONE : bacnetLiftCarDirection;
+    g_queuedLandingCall.destination = destinationCall ? destination : 0;
+    printf("WriteProperty: Elevator Group 1 (Maroon) Landing_Call_Control <- floor %u, %s %u\n", floorNumber,
+           destinationCall ? "destination" : "direction", destinationCall ? destination : bacnetLiftCarDirection);
+    if (!IsLandingCallFloor(floorNumber)) {
+        g_landingCalls.push_back(g_queuedLandingCall);
+    }
+    g_car.RequestStop(floorNumber);
+    if (g_car.Faulted()) {
+        printf("SIMULATION: the car is faulted - the call to floor %u waits, unassigned\n", floorNumber);
+    }
     return true;
 }
 
@@ -1468,6 +1611,124 @@ bool ReinitializeDevice(const uint32_t deviceInstance, const uint32_t reinitiali
     return false;
 }
 
+// -----------------------------------------------------------------------------
+// 2h. SIMULATION: running the car, serving landing calls, telling the stack
+//
+// BACnetStack_UpdateValue is what makes COV and the event/fault algorithms see
+// a value this application serves - without it the car could move and no
+// subscriber or alarm recipient would ever hear of it.
+// -----------------------------------------------------------------------------
+static void ReportCarChanges(uint32_t changes) {
+    if (changes & ElevatorSimulation::CHANGE_POSITION) {
+        BACnetStack_UpdateValue(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE, PROPERTY_IDENTIFIER_CAR_POSITION);
+    }
+    if (changes & ElevatorSimulation::CHANGE_DIRECTION) {
+        BACnetStack_UpdateValue(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE, PROPERTY_IDENTIFIER_CAR_MOVING_DIRECTION);
+    }
+    if (changes & ElevatorSimulation::CHANGE_DOOR) {
+        BACnetStack_UpdateValue(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE, PROPERTY_IDENTIFIER_CAR_DOOR_STATUS);
+    }
+    if (changes & ElevatorSimulation::CHANGE_FAULTS) {
+        // Fault_Signals is the FAULT_LISTED algorithm's monitored list: this is the
+        // call that takes Mauve to FAULT (and back to NORMAL) and notifies Crimson.
+        BACnetStack_UpdateValue(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE, PROPERTY_IDENTIFIER_FAULT_SIGNALS);
+        printf("SIMULATION: Lift 1 (Mauve) Fault_Signals %s\n",
+               g_car.Faulted() ? "= { DOOR_CLOSING_FAULT } - a door is failing to close" : "cleared");
+    }
+    if (changes & (ElevatorSimulation::CHANGE_POSITION | ElevatorSimulation::CHANGE_DIRECTION)) {
+        printf("SIMULATION: car at floor %u, %s\n", g_car.Position(),
+               ElevatorSimulation::DirectionName(g_car.MovingDirection()));
+    }
+}
+
+// A landing call is served the moment the car stops at its floor (the car has
+// then dropped that stop): it leaves Landing_Calls, and a destination call's
+// passenger, now in the car, has pressed their destination - a car call.
+static void RunLandingCalls() {
+    for (size_t callIndex = 0; callIndex < g_landingCalls.size();) {
+        const QueuedLandingCall call = g_landingCalls[callIndex];
+        const bool served = !g_car.IsStopPending(call.floorNumber) && g_car.Position() == call.floorNumber &&
+                            g_car.MovingDirection() == ElevatorSimulation::Direction::Stopped;
+        if (!served) {
+            ++callIndex;
+            continue;
+        }
+        g_landingCalls.erase(g_landingCalls.begin() + (long)callIndex);
+        printf("Landing call at floor %u served: the car is there, door opening\n", call.floorNumber);
+        if (call.commandChoice == LANDING_CALL_COMMAND_DESTINATION) {
+            g_car.RequestStop(call.destination);
+            printf("SIMULATION: the passenger presses %u in the car\n", call.destination);
+        }
+    }
+}
+
+static void SetPassengerAlarm(bool active) {
+    if (g_liftPassengerAlarm == active) {
+        return;
+    }
+    g_liftPassengerAlarm = active;
+    // Passenger_Alarm is the CHANGE_OF_STATE algorithm's pMonitoredValue (cl. 12.59.24).
+    BACnetStack_UpdateValue(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE, PROPERTY_IDENTIFIER_PASSENGER_ALARM);
+    printf("SIMULATION: Lift 1 (Mauve) passenger alarm button %s\n", active ? "PRESSED" : "released");
+}
+
+// The test-only control channel's commands (simulation/SimulationControl.h):
+//     alarm on|off                       press / release the car's passenger alarm button
+//     obstruct on|off                    block / clear the car's doorway
+//     call <floor>                       a passenger presses <floor> in the car (a car call)
+//     timing <travel> <door> <dwell>     milliseconds per floor / per door move / doors held open
+//     state                              -> "floor <n> direction <d> door <d> stops <a,b> faults <n> calls <a,b>"
+// Each answers "ok" (or the state), or "error <reason>". Landing calls come over
+// BACnet (Landing_Call_Control), never through here.
+static void RunSimulationCommand(const char* command, char* reply, size_t replyLength) {
+    char verb[16] = { 0 };
+    char argument[16] = { 0 };
+    unsigned travel = 0;
+    unsigned door = 0;
+    unsigned dwell = 0;
+    const int fieldCount = sscanf(command, "%15s %15s", verb, argument);
+    const bool on = strcmp(argument, "on") == 0;
+    const bool onOrOff = on || strcmp(argument, "off") == 0;
+    if (fieldCount == 2 && strcmp(verb, "alarm") == 0 && onOrOff) {
+        SetPassengerAlarm(on);
+    } else if (fieldCount == 2 && strcmp(verb, "obstruct") == 0 && onOrOff) {
+        g_car.SetObstructed(on);
+        printf("SIMULATION: something %s the car doorway\n", on ? "is blocking" : "no longer blocks");
+    } else if (fieldCount == 2 && strcmp(verb, "call") == 0) {
+        const long floor = strtol(argument, NULL, 10);
+        if (floor < 0 || floor > 255 || !g_car.RequestStop((uint8_t)floor)) {
+            snprintf(reply, replyLength, "error floor %ld not served", floor);
+            return;
+        }
+    } else if (strcmp(verb, "timing") == 0 &&
+               sscanf(command, "%15s %u %u %u", verb, &travel, &door, &dwell) == 4 &&
+               travel > 0 && door > 0 && dwell > 0) {
+        ElevatorSimulation::Timing timing = g_car.CurrentTiming();
+        timing.floorTravelMilliseconds = travel;
+        timing.doorMoveMilliseconds = door;
+        timing.dwellMilliseconds = dwell;
+        g_car.SetTiming(timing);
+    } else if (fieldCount == 1 && strcmp(verb, "state") == 0) {
+        std::string stops;
+        for (uint8_t stop : g_car.PendingStops()) {
+            stops += (stops.empty() ? "" : ",") + std::to_string(stop);
+        }
+        std::string calls;
+        for (const QueuedLandingCall& call : g_landingCalls) {
+            calls += (calls.empty() ? "" : ",") + std::to_string(call.floorNumber);
+        }
+        snprintf(reply, replyLength, "floor %u direction %s door %s stops %s faults %u calls %s",
+                 g_car.Position(), ElevatorSimulation::DirectionName(g_car.MovingDirection()),
+                 ElevatorSimulation::DoorName(g_car.DoorState()), stops.empty() ? "-" : stops.c_str(),
+                 (unsigned)g_car.Faults().size(), calls.empty() ? "-" : calls.c_str());
+        return;
+    } else {
+        snprintf(reply, replyLength, "error unknown command");
+        return;
+    }
+    snprintf(reply, replyLength, "ok");
+}
+
 // Build the 6-octet BACnet/IP connection string for the LOCAL SUBNET BROADCAST:
 // the directed broadcast address (IP | ~mask) followed by the UDP port in network
 // byte order. (When the mask is 0.0.0.0 - the helper's fallback - this collapses to
@@ -1753,8 +2014,13 @@ int main(int argc, char** argv) {
     }
 
     // Optional Lift properties this example demonstrates (each exercises one of
-    // the four F-ELEVATOR list/sequence callbacks registered above).
+    // the four F-ELEVATOR list/sequence callbacks registered above), plus
+    // Reliability, which the FAULT_LISTED fault algorithm below drives
+    // (cl. 12.59.29: "If a fault algorithm is applied, then this property shall be
+    // the pCurrentReliability parameter for the object's fault algorithm").
     if (!BACnetStack_SetPropertyEnabled(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
+                                        PROPERTY_IDENTIFIER_RELIABILITY, true) ||
+        !BACnetStack_SetPropertyEnabled(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
                                         PROPERTY_IDENTIFIER_ASSIGNED_LANDING_CALLS, true) ||
         !BACnetStack_SetPropertyEnabled(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
                                         PROPERTY_IDENTIFIER_REGISTERED_CAR_CALL, true) ||
@@ -1807,14 +2073,39 @@ int main(int argc, char** argv) {
     // Note: unlike B-AAC (AE-CRL-B), Recipient_List is NOT made writable here -
     // AE-CRL-B is not a required BIBB for this profile.
 
-    // Arm an intrinsic ChangeOfState (boolean) algorithm on Lift 1 (Mauve)'s
-    // Passenger_Alarm: alarmValue=true means "Passenger_Alarm == true is the
-    // OFFNORMAL condition". See the file header comment for how this is
-    // simulated (a 30-second timer, never a write).
+    // TEST ONLY: a second, CONFIRMED recipient for the Wire Tests' operator
+    // workstation - see TEST_EVENT_RECIPIENT_PORT_VARIABLE above. Off unless set.
+    const char* testRecipientPortText = getenv(TEST_EVENT_RECIPIENT_PORT_VARIABLE);
+    if (testRecipientPortText != NULL && testRecipientPortText[0] != '\0') {
+        const long testRecipientPort = strtol(testRecipientPortText, NULL, 10);
+        const uint8_t testRecipientMac[6] = { 127, 0, 0, 1, (uint8_t)(testRecipientPort >> 8),
+                                              (uint8_t)(testRecipientPort & 0xFF) };
+        if (testRecipientPort <= 0 || testRecipientPort > 65535 ||
+            !BACnetStack_AddRecipientToNotificationClass(
+                g_deviceInstance, NOTIFICATION_CLASS_INSTANCE, validDaysAll, 0, 0, 0, 0, 23, 59, 59, 99,
+                TEST_RECIPIENT_PROCESS_IDENTIFIER, true /*confirmed*/, true, true, true,
+                false, 0, true, 0, testRecipientMac, sizeof(testRecipientMac))) {
+            printf("Error: %s=%s - could not add the test event recipient.\n",
+                   TEST_EVENT_RECIPIENT_PORT_VARIABLE, testRecipientPortText);
+            return 1;
+        }
+        printf("TEST: Crimson also notifies 127.0.0.1:%ld, confirmed (%s).\n", testRecipientPort,
+               TEST_EVENT_RECIPIENT_PORT_VARIABLE);
+    }
+
+    // Lift 1 (Mauve)'s event reporting, both halves 135-2024 cl. 12.59 names:
+    //   "Lift objects that support intrinsic reporting shall apply the
+    //    CHANGE_OF_STATE event algorithm on the Passenger_Alarm property. The
+    //    pAlarmValues parameter shall contain the value TRUE."
+    //   "For reliability-evaluation, the FAULT_LISTED fault algorithm can be
+    //    applied." - its pMonitoredList is Fault_Signals (cl. 12.59.32).
+    // So a passenger pressing the alarm button is a to-offnormal ALARM, and a car
+    // fault (the simulated door that fails to close) is a to-fault. Both go to
+    // Notification Class 1 (Crimson)'s recipients.
     if (!BACnetStack_SetAlarmsAndEventsForObjectEnabled(
             g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
             NOTIFICATION_CLASS_INSTANCE, NOTIFY_TYPE_ALARM,
-            true /*enableToOffNormal*/, false /*enableToFault*/, true /*enableToNormal*/,
+            true /*enableToOffNormal*/, true /*enableToFault*/, true /*enableToNormal*/,
             true /*enableEventDetection*/,
             true /*enabled - 6.x dropped this argument's default, so pass it explicitly*/)) {
         printf("Error: could not enable alarms on Lift 1 (Mauve).\n");
@@ -1825,6 +2116,26 @@ int main(int argc, char** argv) {
             true /*alarmValue: Passenger_Alarm == true is OFFNORMAL*/,
             0 /*timeDelay*/, false, 0, true /*enable*/)) {
         printf("Error: could not arm the ChangeOfState algorithm on Mauve's Passenger_Alarm.\n");
+        return 1;
+    }
+    if (!BACnetStack_SetFaultListedAlgorithm(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE, true /*enable*/)) {
+        printf("Error: could not arm the FAULT_LISTED algorithm on Mauve's Fault_Signals.\n");
+        return 1;
+    }
+
+    // DS-COVM-B on the car: a client can subscribe (with SubscribeCOVPropertyMultiple)
+    // to where the car is, where it is going and what its door is doing.
+    if (!BACnetStack_SetPropertySubscribable(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
+                                             PROPERTY_IDENTIFIER_CAR_POSITION, true) ||
+        !BACnetStack_SetPropertySubscribable(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
+                                             PROPERTY_IDENTIFIER_CAR_MOVING_DIRECTION, true) ||
+        !BACnetStack_SetPropertySubscribable(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
+                                             PROPERTY_IDENTIFIER_CAR_DOOR_STATUS, true)) {
+        printf("Error: Failed to make Lift 1 (Mauve)'s car properties subscribable.\n");
+        return 1;
+    }
+
+    if (!SimulationControl::Start(SIMULATION_CONTROL_PORT_VARIABLE)) {
         return 1;
     }
 
@@ -1838,23 +2149,21 @@ int main(int argc, char** argv) {
            g_deviceInstance, DEVICE_NAME, VENDOR_IDENTIFIER);
 
     // --- Run the stack ------------------------------------------------------
-    time_t lastAlarmToggle = time(NULL);
+    std::chrono::steady_clock::time_point lastCarTick = std::chrono::steady_clock::now();
     bool running = true;
     while (running) {
         BACnetStack_Tick();
 
-        // --- AE-N-I-B demo: flip the simulated Passenger_Alarm every 30 s ----
-        // No write, no key - a controller still just reports what the
-        // (simulated) elevator hardware is doing here, on its own schedule.
-        time_t now = time(NULL);
-        if (now - lastAlarmToggle >= PASSENGER_ALARM_SIMULATION_PERIOD_SECONDS) {
-            g_liftPassengerAlarm = !g_liftPassengerAlarm;
-            lastAlarmToggle = now;
-            BACnetStack_UpdateValue(g_deviceInstance, OBJECT_TYPE_LIFT, LIFT_INSTANCE,
-                                    PROPERTY_IDENTIFIER_PASSENGER_ALARM);
-            printf("Simulated Passenger_Alarm on Lift 1 (Mauve): %s\n",
-                   g_liftPassengerAlarm ? "ACTIVE" : "cleared");
+        // --- SIMULATION: the car moves, landing calls are served -------------
+        const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+        const uint32_t elapsedMilliseconds = (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - lastCarTick).count();
+        if (elapsedMilliseconds >= 10) {
+            lastCarTick = now;
+            ReportCarChanges(g_car.Tick(elapsedMilliseconds));
+            RunLandingCalls();
         }
+        SimulationControl::Service(RunSimulationCommand);
 
         // --- F-REINIT: deferred restart (DM-RD-B) ----------------------------
         // ReinitializeDevice only ARMED the restart; RestartDue() fires once the
@@ -1875,7 +2184,9 @@ int main(int argc, char** argv) {
                 g_binaryOutput = binaryOutputAtPowerOn;
                 g_multiStateOutput = multiStateOutputAtPowerOn;
                 g_liftOutOfService = false;
-                g_liftPassengerAlarm = false;
+                SetPassengerAlarm(false);
+                g_landingCalls.clear(); // a restarted controller has lost its calls
+                g_car.ClearStops();
                 g_escalatorOutOfService = false;
                 g_escalatorPassengerAlarm = false;
                 g_escalatorPowerMode = true;
@@ -1916,6 +2227,9 @@ int main(int argc, char** argv) {
                 break;
             }
             case CASExampleHelper::KeyCommand::DemoAdvance:
+                // 's': press (or release) the car's passenger alarm button.
+                SetPassengerAlarm(!g_liftPassengerAlarm);
+                break;
             case CASExampleHelper::KeyCommand::None:
             default:
                 break;
@@ -1928,6 +2242,7 @@ int main(int argc, char** argv) {
 #endif
     }
 
+    SimulationControl::Stop();
     CASExampleHelper::RestoreInput();
     CASExampleHelper::ShutdownUDP();
     return 0;

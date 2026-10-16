@@ -18,7 +18,7 @@ see [README.md](../README.md).
 | **Vendor Identifier** | 389 |
 | **Product Name** | CAS BACnet Stack Example - B-EC |
 | **Product Model Number** | CAS BACnet Stack Example - B-EC |
-| **Application Software Version** | 1.1.0 |
+| **Application Software Version** | 1.2.0 |
 | **Firmware Revision** | 6.0.23.0 (the CAS BACnet Stack version) |
 | **BACnet Protocol Version** | 1 |
 | **BACnet Protocol Revision** | 30 |
@@ -27,9 +27,11 @@ see [README.md](../README.md).
 BACnet Stack. It reports what an elevator installation (an Elevator Group, a
 Lift and an Escalator) is doing - the same object family as the B-EM (Elevator
 Monitor) example - and, unlike a B-EM, also **accepts commands**: WriteProperty
-to three commandable outputs and to the Elevator Group's landing-call control,
-TimeSynchronization, and ReinitializeDevice. It generates intrinsic
-ChangeOfState event notifications on the Lift's `Passenger_Alarm`, answers
+to three commandable outputs and to the Elevator Group's landing-call control -
+a landing call is served by a simulated lift car (README "What is Simulation"),
+which travels to the floor and opens its door - TimeSynchronization, and
+ReinitializeDevice. It generates intrinsic event notifications - CHANGE_OF_STATE
+on the Lift's `Passenger_Alarm`, FAULT_LISTED on its `Fault_Signals` - answers
 ReadProperty/ReadPropertyMultiple for every required property of every object,
 and is discoverable by Who-Is/I-Am and Who-Has/I-Have (and can also initiate a
 Who-Is on demand). It is a tutorial for implementers of the B-EC profile.
@@ -91,9 +93,12 @@ trending (T-*).
 
 An unsolicited I-Am is broadcast to the local subnet at start-up, as well as in
 response to Who-Is. Event notifications are sent (unconfirmed, to the local
-subnet broadcast) when the Lift's intrinsic ChangeOfState algorithm transitions
-- simulated on a 30-second timer, since `Passenger_Alarm` is not writable
-through any API in this stack.
+subnet broadcast) when the Lift's CHANGE_OF_STATE algorithm (`Passenger_Alarm`,
+the car's alarm button) or FAULT_LISTED algorithm (`Fault_Signals`, notified as
+CHANGE_OF_RELIABILITY) transitions. The Wire Tests add a second, confirmed
+recipient through the test-only `BEC_TEST_EVENT_RECIPIENT_PORT` environment
+variable; `Number_Of_APDU_Retries` is 3, so an unacknowledged confirmed
+notification is sent again after `APDU_Timeout` (10000 ms).
 
 Any other confirmed service is rejected. That rejection is part of the
 profile boundary, not a limitation to work around.
@@ -128,7 +133,7 @@ writable properties on this device.
 | Multi-state Output | 1 | Indigo | - |
 | Network Port | 1 | Vermilion | - |
 | Elevator Group | 1 | Maroon | - |
-| Lift | 1 | Mauve | Assigned_Landing_Calls, Registered_Car_Call, Landing_Door_Status |
+| Lift | 1 | Mauve | Reliability (FAULT_LISTED), Assigned_Landing_Calls, Registered_Car_Call, Landing_Door_Status; intrinsic reporting (Event_State, Event_Enable, Notification_Class, ...) |
 | Escalator | 1 | Mint | Power_Mode, Escalator_Mode |
 | Positive Integer Value | 1 | Turquoise | - |
 | Notification Class | 1 | Crimson | - |
@@ -193,7 +198,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Max_APDU_Length_Accepted | Unsigned | stack default, accepted (`CAS_BACNET_DEVICE_DEFAULT_MAX_APDU_LENGTH_ACCEPTED`) | no |
 | Segmentation_Supported | BACnetSegmentation | stack default, accepted (`BACnetSegmentation::segmentedBoth` with `STACK_OPTION_SEGME) | no |
 | APDU_Timeout | Unsigned | stack default, accepted (`CAS_BACNET_DEVICE_DEFAULT_APDU_TIMEOUT`) | no |
-| Number_Of_APDU_Retries | Unsigned | stack default, accepted (`CAS_BACNET_DEVICE_DEFAULT_NUMBER_OF_APDU_RETRIES`) | no |
+| Number_Of_APDU_Retries | Unsigned | app | no |
 | Device_Address_Binding | BACnetLIST of BACnetAddressBinding | stack | no |
 | Database_Revision | Unsigned | stack default, accepted (Generic UnsignedInteger default: `0`) | no |
 | Property_List | BACnetARRAY[N] of BACnetPropertyIdentifier | stack | no |
@@ -307,7 +312,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Changes_Pending | Boolean | app | no |
 | Property_List | BACnetARRAY[N] of BACnetPropertyIdentifier | stack | no |
 
-### Elevator Group 1 "Maroon" - F-ELEVATOR (canonical, from B-EM). Machine_Room_ID, Group_ID and Group_Members are NOT stack DEFAULTS - they are genuinely stored and served by BACnetStack_AddElevatorGroupObject (Group_Members is also maintained by BACnetStack_AddLiftOrEscalatorObject as Lift 1/Mauve is added to this group). They are marked accepted only because property-profile-reference.md's generic per-type table does not know about this object-specific host-configuration API and so cannot credit them as stack-served. isGroupOfLifts=true and supportLandingCallStatus=true: Group_Mode and LandingCalls are therefore also enabled (see the Lift's note for how the four F-ELEVATOR list/sequence callbacks are exercised) but property-profile-reference.md's generic Elevator Group table does not mark either 'required', so neither generates a checked row here - Group_Mode is served by GetPropertyEnumerated (normal) and LandingCalls by GetListElevatorGroupLandingCallStatus (no calls outstanding: the callback returns false on its first call, the empty-list answer) regardless. NEW vs B-EM: Landing_Call_Control is now writable - BACnetStack_RegisterCallbackSetElevatorGroupLandingCallControl is registered (unlike B-EM, which deliberately left it unregistered), so a WriteProperty commanding a landing call is recorded (only - nothing moves the car) and read back through GetListElevatorGroupLandingCallStatus; before any write it reads floor 0, direction none. A raw-encoded write (09 07 19 03, floor 7 up) round-tripped on 2026-10-15, checked by hand, not yet a Wire Test
+### Elevator Group 1 "Maroon" - F-ELEVATOR (canonical, from B-EM). Machine_Room_ID, Group_ID and Group_Members are NOT stack DEFAULTS - they are genuinely stored and served by BACnetStack_AddElevatorGroupObject (Group_Members is also maintained by BACnetStack_AddLiftOrEscalatorObject as Lift 1/Mauve is added to this group). They are marked accepted only because property-profile-reference.md's generic per-type table does not know about this object-specific host-configuration API and so cannot credit them as stack-served. isGroupOfLifts=true and supportLandingCallStatus=true: Group_Mode and LandingCalls are therefore also enabled (see the Lift's note for how the four F-ELEVATOR list/sequence callbacks are exercised) but property-profile-reference.md's generic Elevator Group table does not mark either 'required', so neither generates a checked row here - Group_Mode is served by GetPropertyEnumerated (normal) and LandingCalls by GetListElevatorGroupLandingCallStatus (the group's active landing calls, one element per call; an empty list returns false on the first call) regardless. NEW vs B-EM: Landing_Call_Control is writable - BACnetStack_RegisterCallbackSetElevatorGroupLandingCallControl is registered (B-EM deliberately leaves it unregistered) - and a landing call written to it is SERVED: the simulated car travels to the floor, opens its door, and the call leaves Landing_Calls (a destination call then becomes a car call). A call for a floor outside 1-8 is refused (the stack answers Error PROPERTY / WRITE_ACCESS_DENIED: the callback has no errorCode parameter). The last accepted call reads back; before any it reads floor 0, direction none. Proven by tests/landing_call_test.py and landing_call_failure_test.py
 
 | Property | Datatype | Served by | Writable |
 |---|---|---|:---:|
@@ -318,7 +323,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Group_ID | Unsigned8 | stack default, accepted (Generic UnsignedInteger default: `0`) | no |
 | Group_Members | BACnetARRAY[N] of BACnetObjectIdentifier | stack default, accepted (None known - a read fails with `unknown-property` or an empt) | no |
 
-### Lift 1 "Mauve" - F-ELEVATOR (canonical). property-profile-reference.md's generated Lift table is INCOMPLETE relative to CASBACnetStackDLL.h's own doc comment for BACnetStack_AddLiftOrEscalatorObject (a documentation gap in the stack repo, not a stack API gap): the markdown table omits Car_Position, Car_Moving_Direction, Car_Door_Status, Passenger_Alarm, Out_Of_Service and Fault_Signals entirely, even though the DLL header lists all six as REQUIRED Lift properties. This example serves every one of them regardless, because they are genuinely required by clause 12.59 - Car_Position and Car_Moving_Direction via GetPropertyUnsignedInteger/GetPropertyEnumerated, Car_Door_Status (one door, index 1) via GetPropertyEnumerated with useArrayIndex, Passenger_Alarm and Out_Of_Service via GetPropertyBool, Fault_Signals (empty - no active faults) via the GetListOfEnumerations callback. Status_Flags, Elevator_Group, Group_ID and Installation_ID ARE in the generic table (stack-computed/stack-stored) and are accepted for the same reason as Maroon's. Passenger_Alarm is the AE-N-I-B alarm source: an intrinsic ChangeOfState(bool) algorithm routed to Notification Class 1 (Crimson); it is not writable through any API in this stack (a real installation drives it from hardware), so this example simulates it on a 30-second timer rather than a key or a write - see the file header comment in main.cpp. Optional properties Assigned_Landing_Calls, Registered_Car_Call and Landing_Door_Status are enabled and each exercises one of the four F-ELEVATOR list/sequence callbacks with one demonstration entry
+### Lift 1 "Mauve" - F-ELEVATOR (from B-EM). The Lift presents the car SIMULATION (simulation/ElevatorCar.cpp, the same file as B-EM's; README 'What is Simulation'): Car_Position and Car_Moving_Direction via GetPropertyUnsignedInteger/GetPropertyEnumerated, Car_Door_Status (one door, index 1) via GetPropertyEnumerated with useArrayIndex - SAFETY_LOCKED while the car moves, OPENING/OPENED/CLOSING/CLOSED at a stop - Passenger_Alarm and Out_Of_Service via GetPropertyBool, and Fault_Signals (DOOR_CLOSING_FAULT when a door fails to close) via GetListOfEnumerations. Every change goes to the stack with BACnetStack_UpdateValue. property-profile-reference.md's generated Lift table is INCOMPLETE relative to CASBACnetStackDLL.h's doc comment for BACnetStack_AddLiftOrEscalatorObject (a documentation gap in the stack repo, not a stack API gap): it omits those six required properties; this example serves them because clause 12.59 requires them. Status_Flags, Elevator_Group, Group_ID and Installation_ID ARE in the generic table (stack-computed/stack-stored) and are accepted for the same reason as Maroon's. Event reporting, both algorithms clause 12.59 names: CHANGE_OF_STATE on Passenger_Alarm (pAlarmValues TRUE; the 's' key or the test-only control channel presses the button) and FAULT_LISTED on Fault_Signals, both to Notification Class 1 (Crimson). Reliability is enabled for the fault algorithm and computed by the stack from it; the app does not serve it. Car_Position, Car_Moving_Direction and Car_Door_Status are SetPropertySubscribable (DS-COVM-B on the car). Optional Assigned_Landing_Calls (the group's active landing calls - Mauve is its only car - and none while the car is faulted), Registered_Car_Call (the car's pending stops that are not landing calls: a destination call's destination) and Landing_Door_Status (floors 1-8: the car's floor follows the car door, the others SAFETY_LOCKED) are enabled and served by the F-ELEVATOR sequence callbacks
 
 | Property | Datatype | Served by | Writable |
 |---|---|---|:---:|
