@@ -3,7 +3,7 @@
 # Public-domain example code (CC0) - see ../LICENSE.
 """B-EC Wire Test - the passenger alarm: reported, listed, acknowledged; and what stays read-only.
 
-    python3 tests/passenger_alarm_test.py [--exe build/BACnetExampleBEC] [--port 48035]
+    python3 tests/passenger_alarm_test.py [--exe build/BACnetExampleBEC] [--port 47833]
 
 ANSI/ASHRAE 135-2024 cl. 12.59: "Lift objects that support intrinsic reporting shall apply
 the CHANGE_OF_STATE event algorithm on the Passenger_Alarm property. The pAlarmValues
@@ -17,6 +17,11 @@ The Peer is an operator workstation (wiretest.Workstation), Crimson's confirmed 
 the Simulation's control channel.
 
   1. Control: Passenger_Alarm FALSE, Event_State NORMAL, nothing in GetEventInformation.
+  1b. Crimson's seeded Recipient_List default is the entry 135-2024 cl. 12.21 prescribes for a
+     read-only list (135.1 7.3.2.21.3.9): all days, 00:00:00.00-23:59:59.99, Recipient = local
+     broadcast (network 0, empty MAC), Process Identifier 0, unconfirmed, all transitions - and
+     the alarm goes out to it as a local broadcast UnconfirmedEventNotification (the example's
+     own TX log line, since no other socket can share its port).
   2. A passenger presses the alarm button: Passenger_Alarm TRUE, Event_State OFFNORMAL,
      Status_Flags IN_ALARM, and a ConfirmedEventNotification NORMAL -> OFFNORMAL, event type
      CHANGE_OF_STATE, priority 100, ack required, reaches the workstation.
@@ -41,6 +46,14 @@ OFFNORMAL_PRIORITY = 100     # main.cpp NC_PRIORITY_TO_OFFNORMAL
 # A confirmed notification the workstation missed is sent again APDU_Timeout (10 s) later
 # (main.cpp serves Number_Of_APDU_Retries 3), so wait long enough for one retransmission.
 NOTIFICATION_WAIT = 12
+
+# Crimson's first Recipient_List entry, encoded as cl. 12.21 requires for a read-only list
+# (BACnetDestination, cl. 21): valid days all, 00:00:00.00, 23:59:59.99, Recipient [1] address
+# (network 0, empty MAC), Process Identifier 0, Issue Confirmed FALSE, transitions T,T,T.
+CL_12_21_DESTINATION = bytes.fromhex("8201feb400000000b4173b3b631e2100601f2100108205e0")
+PROPERTY_RECIPIENT_LIST = 102
+CRIMSON = (15, 1)            # Notification Class 1
+BROADCAST_EVENT_TX = "(broadcast) (Network Port 1) - Unconfirmed: UnconfirmedEventNotification"
 
 
 def alarm_state(workstation, args):
@@ -70,11 +83,22 @@ def main():
         record("Control: GetEventInformation lists nothing", summaries == [],
                f"read {summaries}" if summaries is not None else answer.describe())
 
+        # --- 1b. The seeded Recipient_List entry, and the broadcast mark ----------------------------
+        recipients = workstation.read_property(args.port, *CRIMSON, PROPERTY_RECIPIENT_LIST, timeout=2.0)
+        octets = recipients.value_octets if recipients.answered and recipients.frame.pdu_type == wiretest.PDU_COMPLEX_ACK             else None
+        record("Recipient_List: Crimson's seeded default entry is cl. 12.21's local broadcast, Process Identifier 0",
+               octets is not None and octets.startswith(CL_12_21_DESTINATION),
+               octets.hex() if octets is not None else recipients.describe())
+        broadcasts_before = example.output().count(BROADCAST_EVENT_TX)
+
         # --- 2. The alarm button ------------------------------------------------------------
         mark = workstation.mark()
         hands.send("alarm on")
         notification = workstation.wait_for_notification(
             setup.from_lift(alarm.EVENT_STATE_OFFNORMAL, setup.EVENT_TYPE_CHANGE_OF_STATE), NOTIFICATION_WAIT, mark)
+        record("The alarm also goes to the local-broadcast recipient: an UnconfirmedEventNotification is sent "
+               "as a local broadcast", example.output().count(BROADCAST_EVENT_TX) > broadcasts_before,
+               f"{example.output().count(BROADCAST_EVENT_TX) - broadcasts_before} broadcast event TX lines")
         state = alarm_state(workstation, args)
         record("Alarm pressed: Passenger_Alarm TRUE, Event_State OFFNORMAL, IN_ALARM set",
                state == (True, alarm.EVENT_STATE_OFFNORMAL, True), f"read {state}")

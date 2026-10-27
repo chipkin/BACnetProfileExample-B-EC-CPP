@@ -49,7 +49,9 @@ string in `GetPropertyCharString`).
 **Change the device identity before you ship** - vendor ID, vendor name, model
 name, description, firmware revision, device name and the DCC/ReinitializeDevice
 password are all in the `CHANGE ALL OF THIS BEFORE YOU SHIP` block at the top of
-`main.cpp`, with a per-field note on each saying what to change it to. That
+`main.cpp`, with a per-field note on each saying what to change it to. The
+device name there is only the default: each unit takes its own with
+`--deviceName` at start-up, as it takes its instance with `--deviceID`. That
 block is the authoritative checklist; it is in the source rather than here so
 it cannot be skipped by someone who only reads the code.
 
@@ -186,15 +188,15 @@ rather than against "it looked fine in the explorer":
    it reads floor 0, direction `none`), watch it appear in Maroon's
    `Landing_Calls`, the car's `Car_Position` climb to 6, and the call clear; a
    call for floor 9 must be refused.
-6. Confirm services this profile does **not** implement (e.g. AE-CRL-B -
-   `Recipient_List` is not writable here) are still rejected.
+6. Confirm services this profile does **not** implement are still rejected
+   (AE-CRL-B is not claimed, although Crimson's `Recipient_List` is writable).
 
 ### Keeping the PICS honest
 
 `docs/PICS.md` is partly generated. `docs/objects.json` describes each object
 and who serves which property; the series tool regenerates the object tables
-from it plus the stack's own `docs/property-profile-reference.md` at the
-pinned commit:
+from it plus the CAS BACnet Stack's property profiles (a reference the series
+tool vendors):
 
 ```bash
 python tools/gen-objects-properties.py BACnetProfileExample-B-EC-CPP            # rewrite

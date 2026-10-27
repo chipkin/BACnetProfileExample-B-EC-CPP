@@ -3,7 +3,7 @@
 # Public-domain example code (CC0) - see ../LICENSE.
 """B-EC Wire Test - the commandable outputs: priority arbitration and an out-of-range command.
 
-    python3 tests/outputs_test.py [--exe build/BACnetExampleBEC] [--port 48035]
+    python3 tests/outputs_test.py [--exe build/BACnetExampleBEC] [--port 47833]
 
 Analog Output 1 "Chartreuse", Binary Output 1 "Fuchsia" and Multi-state Output 1 "Indigo" are
 the F-OUTPUTS block (canonical in B-SA-CPP): commandable objects whose Present_Value the stack

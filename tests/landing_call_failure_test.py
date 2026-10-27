@@ -3,7 +3,7 @@
 # Public-domain example code (CC0) - see ../LICENSE.
 """B-EC Wire Test - Failure Modes: a call the group cannot serve, and a car that is faulted.
 
-    python3 tests/landing_call_failure_test.py [--exe build/BACnetExampleBEC] [--port 48035]
+    python3 tests/landing_call_failure_test.py [--exe build/BACnetExampleBEC] [--port 47833]
 
   A. A floor this group does not serve. The car serves universal floors 1-8. A landing call
      for floor 9, for floor 0, or a destination call from 2 to 9 is refused with an Error;

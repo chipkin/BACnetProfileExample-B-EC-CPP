@@ -3,7 +3,7 @@
 # Public-domain example code (CC0) - see ../LICENSE.
 """B-EC Wire Test - the Profile Function: a landing call written over BACnet is served.
 
-    python3 tests/landing_call_test.py [--exe build/BACnetExampleBEC] [--port 48035]
+    python3 tests/landing_call_test.py [--exe build/BACnetExampleBEC] [--port 47833]
 
 ANSI/ASHRAE 135-2024 L.13.2: "A B-EC device performs elevator control. It supports limited
 modification of its elevator objects by another device." Cl. 12.58.10 Landing_Call_Control:

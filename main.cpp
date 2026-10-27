@@ -69,7 +69,8 @@
 // Each object has a colour name (the convention shared across this example
 // series):
 //
-//     Device 389013              "Chipkin Example B-EC"      (instance configurable with --deviceID)
+//     Device 389013              "Chipkin Example B-EC"      (instance configurable with --deviceID,
+//                                                             Object_Name with --deviceName)
 //     Analog Input  1            "Bronze"       (REAL, degrees Celsius; read-only)
 //     Binary Input  1            "Emerald"      (active / inactive; read-only)
 //     Multi-State Input 1        "Hot Pink"     (state 1..3; read-only)
@@ -86,7 +87,8 @@
 //                                                aren't lifts, so it uses the "no reference" sentinel)
 //     Positive Integer Value 1   "Turquoise"    (the Elevator Group's Machine_Room_ID target -
 //                                                must be added BEFORE the Elevator Group, below)
-//     Notification Class 1       "Crimson"      (routes Mauve's alarm and fault events)
+//     Notification Class 1       "Crimson"      (routes Mauve's alarm and fault events;
+//                                                Recipient_List WRITABLE)
 //
 // ALARMING: as B-EM. Lift 1 ("Mauve") arms the two algorithms cl. 12.59 names:
 // CHANGE_OF_STATE on Passenger_Alarm (the car's alarm button - the 's' key or the
@@ -117,7 +119,7 @@
 // DM-DDB-A: broadcast a demo Who-Is on demand (see docs/menu-keys.md - the same
 // key B-LS claims for its own remote-discovery demo), s = press/release the
 // car's passenger alarm button (Simulation). Command line: --port <n>,
-// --deviceID <n>. The Wire Tests use two TEST-ONLY environment variables,
+// --deviceID <n>, --deviceName <text>, --xml. The Wire Tests use two TEST-ONLY environment variables,
 // BEC_SIMULATION_CONTROL_PORT and BEC_TEST_EVENT_RECIPIENT_PORT (README "What is
 // Simulation").
 //
@@ -157,7 +159,7 @@ using namespace CASBACnetStackExampleConstants;
 // 1. Example + device configuration
 // -----------------------------------------------------------------------------
 static const char* APP_NAME = "BACnet B-EC (Elevator Controller) Example - C++";
-static const char* APP_VERSION = "1.2.0";
+static const char* APP_VERSION = "1.3.0";
 
 // The device instance. BACnet requires this to be configurable, so it defaults
 // to 389013 and can be overridden on the command line with --deviceID. Keep it
@@ -181,24 +183,29 @@ static uint32_t g_deviceInstance = 389013;
 // Update VENDOR_NAME below to match.
 static const uint32_t VENDOR_IDENTIFIER = 389;
 
-// The Device object's Object_Name.
+// The Device object's Object_Name - the DEFAULT one.
 //
 // THIS IS THE ONE THAT WILL BITE YOU. Object_Name must be unique across the
-// whole BACnet internetwork, and here it is a COMPILE-TIME constant. The device
-// instance is runtime-configurable via --deviceID, so it is easy to ship two
-// units, configure their instances correctly, and still have BOTH announce
-// Object_Name "Chipkin Example B-EC" - a spec violation, and a hard BTL failure. In a real
-// product Object_Name must be per-unit configurable too: derive it from a serial
-// number, DIP switches, a config file, or add a --deviceName argument.
+// whole BACnet internetwork (cl. 12.1.1.4), so it must be per-unit configurable,
+// exactly like the instance. This example takes it at start-up with
+// --deviceName <text> (common/ ParseDeviceNameArg, read into g_deviceName in
+// main()); DEVICE_NAME is only what a unit announces when nobody configured it.
+// Ship two units without --deviceName and BOTH announce the same Object_Name -
+// a spec violation, and a hard BTL failure. In your product, configure the name
+// per unit (a serial number, DIP switches, a config file, or this argument) and
+// change the default below to something that says "not configured yet".
 static const char* DEVICE_NAME = "Chipkin Example B-EC";
+static const char* g_deviceName = DEVICE_NAME; // --deviceName, or the default
 
 // The Device object's Description. Change it to what YOUR device actually is;
-// this string describes this tutorial.
+// this string describes this tutorial. Keep it under 255 characters: the stack
+// holds at most STACK_OPTION_MAX_CHARACTER_STRING_SIZE - 1 (255) octets from a
+// callback and refuses a longer value, so the property would read as "".
 static const char* DEVICE_DESCRIPTION =
     "Chipkin CAS BACnet Stack example - B-EC (Elevator Controller) profile. "
-    "DS-RP/RPM/WP/WPM-B, DS-COV-B, DS-COVM-B, intrinsic alarming "
-    "(AE-N-I-B / AE-ACK-B / AE-INFO-B), DM-DDB-A, DM-DCC-B, DM-TS-B, DM-RD-B. "
-    "Commands three outputs and the Elevator Group's landing calls.";
+    "DS-RP/RPM/WP/WPM-B, DS-COV-B, DS-COVM-B, "
+    "AE-N-I-B / AE-ACK-B / AE-INFO-B, DM-DDB-A, DM-DCC-B, DM-TS-B, DM-RD-B. "
+    "Commands three outputs and the landing calls.";
 
 // Device identity strings (read by clients, and used to populate I-Am).
 //   VENDOR_NAME - your company name; it must match VENDOR_IDENTIFIER above.
@@ -333,6 +340,14 @@ static uint16_t g_bacnetIpUdpPort = 47808;
 // fires one multi-property notification when this changes.
 static float g_analogInput1Value = 21.5f;
 
+// Analog Input 1's COV_Increment (cl. 12.2.16): the smallest Present_Value change
+// that sends a COV notification to a SubscribeCOV subscriber. Analog Input 1
+// supports COV reporting, so cl. 12.2 footnote 2 REQUIRES this property; the stack
+// leaves it absent unless the application enables it (see the setup below). 1.0
+// deg C: each up/down nudge (1.1) notifies. Not writable.
+static const uint32_t PROPERTY_IDENTIFIER_COV_INCREMENT = 22;
+static const float ANALOG_INPUT_COV_INCREMENT = 1.0f;
+
 // -----------------------------------------------------------------------------
 // F-ELEVATOR: object-type / property-identifier numbers not already in
 // CASBACnetStackExampleConstants.h (verified against BACnetObjectType.h /
@@ -460,20 +475,28 @@ static const uint8_t NC_PRIORITY_TO_FAULT = 50;
 static const uint8_t NC_PRIORITY_TO_NORMAL = 200;
 
 // Where Mauve's alarms are sent. See B-AAC's main.cpp for the full rationale -
-// this example seeds the ADDRESS form, defaulting to the LOCAL SUBNET BROADCAST
-// with UNCONFIRMED notifications, so any BACnet client on the subnet sees the
-// alarm without us knowing its address ahead of time. Unlike B-AAC (AE-CRL-B),
-// this profile's Recipient_List is NOT made writable (out of scope for B-EC's
-// required BIBBs) - so the recipient seeded here is the only one, for the life
-// of the process.
-static const uint32_t RECIPIENT_PROCESS_IDENTIFIER = 1;
+// this example seeds the ADDRESS form, defaulting to a LOCAL BROADCAST with
+// UNCONFIRMED notifications, so any BACnet client on the subnet sees the alarm
+// without us knowing its address ahead of time. The seeded default is the entry
+// 135-2024 cl. 12.21 requires of a READ-ONLY list (kept here, as it suits an
+// unconfigured device): Recipient = local
+// broadcast (network 0, an EMPTY MAC address - not this subnet's
+// directed-broadcast IP), all days, 00:00:00.00-23:59:59.99, Process
+// Identifier 0, unconfirmed, all transitions. The stack hands a send to an
+// empty MAC to HelperSendMessage with no connection string, which sends it to
+// the local subnet broadcast. Recipient_List is also WRITABLE (as on B-AAC), so
+// a management station can point Crimson's alarms at itself; a written list
+// lasts until the example restarts (this example keeps no configuration on
+// disk - nothing else it is told over the network is persisted either).
+static const uint32_t RECIPIENT_PROCESS_IDENTIFIER = 0;
+static const uint32_t PROPERTY_IDENTIFIER_RECIPIENT_LIST = 102;
 static const bool RECIPIENT_USE_BROADCAST = true;
 static uint8_t RECIPIENT_IP[4] = { 0, 0, 0, 0 };  // used when not broadcasting
 
 // TEST ONLY: when this environment variable holds a UDP port, Crimson gets a
 // SECOND recipient, 127.0.0.1:<port>, sent CONFIRMED notifications - the Wire
-// Tests' operator workstation (tests/). This profile's Recipient_List is not
-// writable (AE-CRL-B is not one of its BIBBs), so the tests cannot add it over BACnet.
+// Tests' operator workstation (tests/), present from start-up so a test needs no
+// write first. tests/recipient_list_test.py writes the list over BACnet instead.
 static const char* TEST_EVENT_RECIPIENT_PORT_VARIABLE = "BEC_TEST_EVENT_RECIPIENT_PORT";
 static const uint32_t TEST_RECIPIENT_PROCESS_IDENTIFIER = 2;
 // TEST ONLY: the simulation control channel (simulation/SimulationControl.h).
@@ -570,6 +593,12 @@ bool GetPropertyReal(const uint32_t deviceInstance, const uint16_t objectType,
         // NOT directly from a slow/blocking device: this callback runs on the
         // BACnetStack_Tick() thread, so blocking it delays all BACnet processing.
         *value = g_analogInput1Value;
+        return true;
+    }
+    if (objectType == OBJECT_TYPE_ANALOG_INPUT &&
+        objectInstance == ANALOG_INPUT_INSTANCE &&
+        propertyIdentifier == PROPERTY_IDENTIFIER_COV_INCREMENT) {
+        *value = ANALOG_INPUT_COV_INCREMENT;
         return true;
     }
     // F-OUTPUTS (NEW vs B-EM): Analog Output 1 (Chartreuse) - commandable. Serve
@@ -932,10 +961,13 @@ static bool ReturnCharacterString(const char* text, char* value,
                                   const uint32_t maxElementCount,
                                   uint8_t* encodingType) {
     uint32_t length = (uint32_t)strlen(text);
-    if (length > maxElementCount) {
+    // The stack offers a buffer of maxElementCount octets but holds at most
+    // maxElementCount - 1 (#2997): a value of exactly maxElementCount is refused
+    // and the property reads as an empty string.
+    if (maxElementCount > 0 && length >= maxElementCount) {
         // Truncate SILENTLY to fit the stack's buffer - see B-AAC's main.cpp for
         // the full explanation of when this matters (STACK_OPTION_TARGET_EMBEDDED).
-        length = maxElementCount;
+        length = maxElementCount - 1;
     }
     memcpy(value, text, length);
     *valueElementCount = length;
@@ -974,7 +1006,7 @@ bool GetPropertyCharString(const uint32_t deviceInstance, const uint16_t objectT
     // Object_Name - the colour name for each object.
     if (propertyIdentifier == PROPERTY_IDENTIFIER_OBJECT_NAME) {
         if (objectType == OBJECT_TYPE_DEVICE && objectInstance == g_deviceInstance) {
-            return ReturnCharacterString(DEVICE_NAME, value, valueElementCount, maxElementCount, encodingType);
+            return ReturnCharacterString(g_deviceName, value, valueElementCount, maxElementCount, encodingType);
         }
         if (objectType == OBJECT_TYPE_ANALOG_INPUT && objectInstance == ANALOG_INPUT_INSTANCE) {
             return ReturnCharacterString("Bronze", value, valueElementCount, maxElementCount, encodingType);
@@ -1770,11 +1802,18 @@ int main(int argc, char** argv) {
     }
 
     // --- Command line + version --------------------------------------------
-    if (CASExampleHelper::HandleHelpAndVersionArgs(argc, argv, APP_NAME, APP_VERSION)) {
+    // The help lists only the options this example reads: no --dcc-password (the
+    // DeviceCommunicationControl / ReinitializeDevice password is DCC_PASSWORD in
+    // this file, not a command-line option), and --deviceName (read below).
+    if (CASExampleHelper::HandleHelpAndVersionArgs(argc, argv, APP_NAME, APP_VERSION,
+                                                   false,   // no --dcc-password
+                                                   true)) { // --deviceName
         return 0;
     }
     const uint16_t port = CASExampleHelper::ParsePortArg(argc, argv, 47808);
     g_deviceInstance = CASExampleHelper::ParseDeviceIdArg(argc, argv, g_deviceInstance);
+    g_deviceName = CASExampleHelper::ParseDeviceNameArg(argc, argv, DEVICE_NAME);
+    CASExampleHelper::ParseXmlLogArg(argc, argv); // --xml: dump every RX/TX frame as XML instead of one line (off by default)
     CASExampleHelper::PrintVersion(APP_NAME, APP_VERSION);
 
     // --- Bind the BACnet/IP socket -----------------------------------------
@@ -1931,6 +1970,13 @@ int main(int argc, char** argv) {
         printf("Error: Failed to enable State_Text on Multi-State Input 1 (Hot Pink).\n");
         return 1;
     }
+    // Analog Input 1 (Bronze) supports COV reporting (DS-COV-B), so its COV_Increment
+    // is required (cl. 12.2 footnote 2); GetPropertyReal serves the value.
+    if (!BACnetStack_SetPropertyEnabled(g_deviceInstance, OBJECT_TYPE_ANALOG_INPUT,
+                                        ANALOG_INPUT_INSTANCE, PROPERTY_IDENTIFIER_COV_INCREMENT, true)) {
+        printf("Error: Failed to enable COV_Increment on Analog Input 1 (Bronze).\n");
+        return 1;
+    }
 
     // --- F-OUTPUTS (NEW vs B-EM): make the three output objects commandable --
     // See B-SA-CPP's main.cpp for why these calls matter for Analog/Binary/
@@ -2046,9 +2092,10 @@ int main(int argc, char** argv) {
         printf("Error: Failed to add Notification Class 1 (Crimson).\n");
         return 1;
     }
-    uint8_t recipientMac[6];
+    uint8_t recipientMac[6] = { 0 };
+    uint32_t recipientMacLength = sizeof(recipientMac);
     if (RECIPIENT_USE_BROADCAST) {
-        LocalBroadcastConnString(recipientMac);
+        recipientMacLength = 0; // local broadcast: network 0, empty MAC (cl. 12.21)
     } else {
         memcpy(recipientMac, RECIPIENT_IP, 4);
         recipientMac[4] = (uint8_t)(g_bacnetIpUdpPort >> 8);
@@ -2066,12 +2113,21 @@ int main(int argc, char** argv) {
             false, 0,           // NOT using the device choice
             true,               // use the ADDRESS choice
             0,                  // network number 0 = this local network
-            recipientMac, sizeof(recipientMac))) {
+            recipientMac, recipientMacLength)) {
         printf("Error: could not seed the Notification Class recipient (Crimson).\n");
         return 1;
     }
-    // Note: unlike B-AAC (AE-CRL-B), Recipient_List is NOT made writable here -
-    // AE-CRL-B is not a required BIBB for this profile.
+    // Make Crimson's Recipient_List WRITABLE, as B-AAC does. The stack decodes and
+    // stores a written BACnetDestination list itself (a stack-held, constructed
+    // property - no Set callback is needed); notifications then go to the
+    // written recipients. B-EC's profile does not require AE-CRL-B, but a
+    // read-only list would have to stay at the cl. 12.21 default for ever, and
+    // an installer usually wants alarms to reach a known workstation.
+    if (!BACnetStack_SetPropertyWritable(g_deviceInstance, OBJECT_TYPE_NOTIFICATION_CLASS,
+                                         NOTIFICATION_CLASS_INSTANCE, PROPERTY_IDENTIFIER_RECIPIENT_LIST, true)) {
+        printf("Error: could not make Notification Class 1 (Crimson) Recipient_List writable.\n");
+        return 1;
+    }
 
     // TEST ONLY: a second, CONFIRMED recipient for the Wire Tests' operator
     // workstation - see TEST_EVENT_RECIPIENT_PORT_VARIABLE above. Off unless set.
@@ -2146,7 +2202,7 @@ int main(int argc, char** argv) {
     printf("FYI: Device %u (\"%s\") ready. Vendor ID %u. Accepts WriteProperty to "
            "Chartreuse/Fuchsia/Indigo and Landing_Call_Control on Maroon. Press "
            "'d' to broadcast a demo Who-Is (DM-DDB-A), or 'h' for help.\n",
-           g_deviceInstance, DEVICE_NAME, VENDOR_IDENTIFIER);
+           g_deviceInstance, g_deviceName, VENDOR_IDENTIFIER);
 
     // --- Run the stack ------------------------------------------------------
     std::chrono::steady_clock::time_point lastCarTick = std::chrono::steady_clock::now();

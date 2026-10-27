@@ -2,7 +2,7 @@
 
 Defects this example cannot fix itself. A defect that stops a Wire Test check is
 reported as a `[KNOWN GAP]` line ([`tests/`](tests/README.md)): reported on every
-run, not counted as a failure. **There are none at Stack Pin `6.x` @ `64b2cfac5`**
+run, not counted as a failure. **There are none at Stack Pin `6.x` @ `69b6249f`**
 - every check of the Profile Function and its Failure Modes passes.
 
 ## Observed in the stack, not affecting a check
@@ -37,3 +37,31 @@ FAULT_LISTED on `Fault_Signals`, the `UpdateValue` of `Fault_Signals` that clear
 a fault (FAULT -> NORMAL) logs
 `BACnetChangeOfStateEventAlgorithm::SetMonitoredValue() - Error: monitoredValue has invalid datatype=[255]`.
 No effect on any check.
+
+### 3. `SetPropertySubscribable` leaves `COV_Increment` absent
+
+Filed: `chipkin/cas-bacnet-stack#4602` (ref for support).
+
+Enabling COV on Analog Input 1 does not make the stack serve `COV_Increment`;
+cl. 12.2 requires it for an Analog Input that supports COV reporting. The
+example serves it itself (read-only, 1.0), so nothing is wrong on the wire;
+the note is here so nobody removes that workaround.
+
+## Known limitations of this example
+
+- **A written `Recipient_List` is lost at restart.** Notification Class 1's
+  `Recipient_List` is writable, but the list lives only in memory and returns to
+  the standard default (local broadcast) when the example restarts (cl. 12.21.8).
+  Whether the examples should keep it is an open question.
+  (ref: `chipkin/chipkin-bacnet-testing-tool#684`)
+- **Analog Input 1's `Out_Of_Service` is read-only.** A test tool therefore
+  cannot drive that input to exercise COV, event or DeviceCommunicationControl
+  scenarios; use the `up` / `down` keys on the console instead.
+- **`ReinitializeDevice` STARTBACKUP / STARTRESTORE are not supported**; they
+  answer Error (SERVICES, OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED). COLDSTART and
+  WARMSTART are supported.
+- **Operator-driven conformance rows stay manual** (AE-N-I-B, AE-ACK-B and
+  DM-DDB-A steps that need a person to press a key).
+  (ref: `chipkin/chipkin-bacnet-testing-tool#680`)
+- **Time synchronization and restart are not covered by the Wire Tests**; they
+  were checked by hand.

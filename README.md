@@ -23,9 +23,9 @@ accepts **TimeSynchronization**, and accepts **ReinitializeDevice**.
 - **[docs/PICS.md](docs/PICS.md)** - the Protocol Implementation Conformance
   Statement: every object, every property, and who answers it.
 
-> **Versions:** this document describes **example v1.2.0**, built and verified
-> against **CAS BACnet Stack 6.0.23** (`6.x` @ `64b2cfac5`), at
-> **Protocol_Revision 30**, with the vendored `common/` helper at **v3.4.0**.
+> **Versions:** this document describes **example v1.3.0**, built and verified
+> against **CAS BACnet Stack 6.0.23** (`6.x` @ `69b6249f`), at
+> **Protocol_Revision 30**, with the vendored `common/` helper at **v3.5.0**.
 > Running the example prints all three - if what it prints disagrees with this
 > line, trust the program and check `CHANGELOG.md`.
 
@@ -96,7 +96,8 @@ unless `BEC_SIMULATION_CONTROL_PORT` names a port. It presses the alarm button,
 blocks the doorway and speeds the car up for a test; landing calls always come
 over BACnet. A second test-only variable, `BEC_TEST_EVENT_RECIPIENT_PORT`, adds
 the test's workstation (127.0.0.1) to Notification Class 1 as a confirmed
-recipient (`Recipient_List` is not writable in this profile). Neither is a
+recipient from start-up (`Recipient_List` is also writable over BACnet; see
+`tests/recipient_list_test.py`). Neither is a
 command-line option. Delete `simulation/` and drive your elevator instead.
 
 ## What is a B-EC (Elevator Controller) profile?
@@ -163,8 +164,9 @@ Object names follow the series' colour convention (Device is always
 | DM-TS-B | Device Management - TimeSynchronization - B | ✅ (local time only, same choice B-LD makes) |
 | DM-RD-B | Device Management - ReinitializeDevice - B | ✅ (COLDSTART and WARMSTART) |
 
-No other BIBBs are supported - in particular AE-CRL-B (the Notification
-Class's `Recipient_List` is not writable here) and DM-UTC-B (this example
+No other BIBBs are supported - in particular AE-CRL-B (not claimed: the
+Notification Class's `Recipient_List` is writable, so a workstation can add
+itself, but this profile does not require the BIBB) and DM-UTC-B (this example
 synchronizes local time only).
 
 ### Services (executed / B-side, plus what this device initiates)
@@ -173,7 +175,7 @@ synchronizes local time only).
 |---------|-------|
 | ReadProperty / ReadPropertyMultiple | Responds to property reads (DS-RP-B / DS-RPM-B). |
 | WriteProperty / WritePropertyMultiple | Accepts writes to the three outputs' `Present_Value` and the Elevator Group's `Landing_Call_Control` (DS-WP-B / DS-WPM-B). |
-| SubscribeCOV / SubscribeCOVPropertyMultiple | Analog Input 1 (Bronze) is subscribable on `Present_Value` and `Status_Flags`. |
+| SubscribeCOV / SubscribeCOVPropertyMultiple | Analog Input 1 (Bronze) is subscribable on `Present_Value` and `Status_Flags`; its `COV_Increment` is 1.0. |
 | ConfirmedEventNotification / UnconfirmedEventNotification | Sent when the Lift's intrinsic ChangeOfState algorithm transitions (AE-N-I-B). |
 | AcknowledgeAlarm | Accepts an operator's acknowledgement of the Lift's alarm (AE-ACK-B). |
 | GetEventInformation | Answers with the Lift's current event state (AE-INFO-B). |
@@ -285,9 +287,9 @@ CMake at it: `cmake -B build -S . -D CAS_STACK_DIR=/path/to/cas-bacnet-stack`.
 Expected output:
 
 ```
-BACnet B-EC (Elevator Controller) Example - C++ v1.1.0
+BACnet B-EC (Elevator Controller) Example - C++ v1.3.0
 CAS BACnet Stack version: 6.0.23.0
-Common helper (common/) version: 3.4.0
+Common helper (common/) version: 3.5.0
 FYI: Listening for BACnet/IP on UDP port 47808 (Network Port 1).
 TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1)
 FYI: Device 389013 ("Chipkin Example B-EC") ready. Vendor ID 389. Accepts WriteProperty to Chartreuse/Fuchsia/Indigo and Landing_Call_Control on Maroon. Press 'd' to broadcast a demo Who-Is (DM-DDB-A), or 'h' for help.
@@ -313,6 +315,8 @@ firewall. To use a different port, pass `--port` (see below).
 |--------|---------|---------|
 | `--port <n>` | `47808` | UDP port to listen on (BACnet/IP). |
 | `--deviceID <n>` | `389013` | The device's BACnet instance number (BACnet requires this to be configurable). |
+| `--deviceName <text>` | `Chipkin Example B-EC` | The Device object's `Object_Name`, 1..255 bytes, no control characters. It must be unique across the BACnet internetwork, so give every unit its own (BACnet requires it to be configurable, like the instance). An invalid value prints a warning and keeps the default. |
+| `--xml` | off | Print every received and sent BACnet message as an indented XML block instead of a one-line summary (very verbose; for protocol debugging). |
 | `--help`, `-h` | - | Show usage and exit. |
 | `--version` | - | Print the example, stack, and `common/` helper versions, then exit. |
 
@@ -364,9 +368,10 @@ Use a BACnet client such as the
 7. **DM-RD-B** - ReinitializeDevice COLDSTART; confirm a SimpleAck and that
    the commandable outputs read back their `Relinquish_Default` afterward.
 8. **DM-DDB-A** - press `d`; confirm a Who-Is broadcast on the wire.
-9. **Confirm the profile boundary** - a WriteProperty to `Recipient_List` on
-   the Notification Class (Crimson) is rejected: AE-CRL-B is not a required
-   BIBB for this profile.
+9. **Point the alarms at your workstation** - read Crimson's `Recipient_List`
+   (one entry: local broadcast, Process Identifier 0, unconfirmed), write it
+   back with your workstation added, and press `s`: the alarm reaches you. A
+   written list lasts until the example restarts.
 
 **What has been checked on the wire, and how.** The Wire Tests below cover
 steps 1-3 and 5 (and the alarm), in CI. Steps 4 (Bronze's COV), 6-9 were
@@ -395,10 +400,11 @@ python tests\run_wire_tests.py --exe build\Release\BACnetExampleBEC.exe   # Wind
 | `landing_call_test.py` | the Profile Function: a landing call (direction, then destination) is served - the car travels, opens, the call clears |
 | `landing_call_failure_test.py` | Failure Modes: unserved floors refused; a faulted car (`DOOR_CLOSING_FAULT`, FAULT_LISTED) holds its calls unassigned, then serves them |
 | `passenger_alarm_test.py` | the passenger alarm reported, listed, acknowledged (with ACK_NOTIFICATION); the car's status refuses writes |
+| `recipient_list_test.py` | Crimson's `Recipient_List`: the seeded local-broadcast default, written over BACnet, read back, alarms delivered to the written recipient; a malformed write refused |
 | `outputs_test.py` | the commandable outputs arbitrate priorities; an out-of-range state is refused |
 
 It ends with `ALL WIRE TESTS PASSED` (exit 0), in about a minute and a half.
-Ports: `--port` (default 48035) and `--port + 1` for the control channel. CI
+Ports: `--port` (default 47833) and `--port + 1` for the control channel. CI
 runs it on Linux after the smoke test. [tests/README.md](tests/README.md) says
 what each check proves and which mutation of `main.cpp` makes it fail. Time
 synchronization and restart are not yet covered.

@@ -65,6 +65,8 @@ RELIABILITY_NO_FAULT_DETECTED, RELIABILITY_FAULTS_LISTED = 0, 23
 EVENT_TYPE_CHANGE_OF_STATE = 1
 EVENT_TYPE_CHANGE_OF_RELIABILITY = 19
 STATUS_FLAG_IN_ALARM, STATUS_FLAG_FAULT = 0, 1
+ERROR_CLASS_OBJECT = 1
+ERROR_CODE_UNKNOWN_OBJECT = 31
 
 # The car's speed for the tests, milliseconds: per floor, per door move, doors held open.
 # main.cpp's defaults (2000 / 1000 / 2000) are a demo for a person watching; a test sets these.
@@ -76,8 +78,8 @@ def parser(description):
     arguments = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     arguments.add_argument("--exe", default=str(wiretest.default_exe(REPOSITORY, "BACnetExampleBEC")),
                            help="path to BACnetExampleBEC (default: build/BACnetExampleBEC)")
-    arguments.add_argument("--port", type=int, default=48035,
-                           help="the controller's UDP port (default 48035); the simulation control channel is --port + 1")
+    arguments.add_argument("--port", type=int, default=47833,
+                           help="the controller's UDP port (default 47833); the simulation control channel is --port + 1")
     return arguments
 
 

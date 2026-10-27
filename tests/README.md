@@ -22,7 +22,7 @@ python3 tests/run_wire_tests.py --exe build/BACnetExampleBEC
 
 On Windows, `--exe build\Release\BACnetExampleBEC.exe` (or the
 `build\static` tree). It ends with `ALL WIRE TESTS PASSED` (exit 0) or the
-scripts that failed, in about a minute and a half. `--port` (default 48035) is
+scripts that failed, in about a minute and a half. `--port` (default 47833) is
 the UDP port the test starts the device on; `--port + 1` is the Simulation's
 control channel. CI (`.github/workflows/release.yml`) runs it on Linux after the
 smoke test.
@@ -88,7 +88,20 @@ required), GetEventInformation, AcknowledgeAlarm with `Acked_Transitions` and an
 **ACK_NOTIFICATION** to the recipients, the return to normal; **Failure Modes**:
 AcknowledgeAlarm for the Escalator refused, WriteProperty to `Car_Position`,
 `Passenger_Alarm` and `Out_Of_Service` refused (the controller is told where to
-go, not where the car is).
+go, not where the car is). It also checks that Crimson's seeded `Recipient_List`
+entry is the cl. 12.21 local-broadcast default (Process Identifier 0), and that the
+alarm is sent to it as a local broadcast (the example's own TX log line).
+
+## `recipient_list_test.py` - Crimson's writable Recipient_List
+
+Started **without** the test-only recipient. Control: `Recipient_List` is the
+seeded default entry only. The workstation writes the default entry plus itself
+(127.0.0.1, Process Identifier 2, confirmed): SimpleACK, and it reads back exactly
+as written. The passenger alarm then reaches the workstation (to-offnormal and
+to-normal ConfirmedEventNotifications), and the default entry's local broadcast
+is still sent. **Failure Mode**: a write that is not a list of BACnetDestination
+is refused and the list is unchanged. Before the list was writable, the write was
+refused and the alarm never reached the workstation.
 
 ## `outputs_test.py` - the commandable outputs
 
