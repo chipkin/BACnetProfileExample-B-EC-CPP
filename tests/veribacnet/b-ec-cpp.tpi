@@ -170,7 +170,7 @@ object-name: "Chipkin Example B-EC"
 object-type: DEVICE
 apdu-segment-timeout: 5000
 apdu-timeout: 10000
-application-software-version: "1.3.0"
+application-software-version: "1.3.1"
 description: "Chipkin CAS BACnet Stack example - B-EC (Elevator Controller) profile. DS-RP/RPM/WP/WPM-B, DS-COV-B, DS-COVM-B, AE-N-I-B / AE-ACK-B / AE-INFO-B, DM-DDB-A, DM-DCC-B, DM-TS-B, DM-RD-B. Commands three outputs and the landing calls."
 device-address-binding: ?
 firmware-revision: "6.0.23.0"

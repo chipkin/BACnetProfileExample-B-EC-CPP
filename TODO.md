@@ -2,8 +2,9 @@
 
 Defects this example cannot fix itself. A defect that stops a Wire Test check is
 reported as a `[KNOWN GAP]` line ([`tests/`](tests/README.md)): reported on every
-run, not counted as a failure. **There are none at Stack Pin `6.x` @ `69b6249f`**
-- every check of the Profile Function and its Failure Modes passes.
+run, not counted as a failure. **There are none at Stack Pin `6.x` @ `1e7dffe2b`**
+- every check of the Profile Function and its Failure Modes passes (Wire Tests on
+Windows, 2026-11-01).
 
 ## Observed in the stack, not affecting a check
 
@@ -25,27 +26,21 @@ Filed: [#3966](https://github.com/chipkin/cas-bacnet-stack/issues/3966).
 - **Evidence:** `landing_call_failure_test.py` output, `Error class=2 code=40`,
   Windows STATIC and Linux, 2026-10-16.
 
-### 2. `UpdateValue(Fault_Signals)` logs a CHANGE_OF_STATE error
+## Fixed in the stack at the pin
 
-Filed: [#3967](https://github.com/chipkin/cas-bacnet-stack/issues/3967). Verification found it is more than a log line: after a fault
-clears, CHANGE_OF_STATE is evaluated on the now-empty Fault_Signals list instead of
-Passenger_Alarm, so a Passenger_Alarm that stayed TRUE through the fault is not re-judged.
+Both were observed here at earlier stack revisions; the fix for each is in the
+pinned revision (`1e7dffe2b`). Kept as a reference for support.
 
-
-Same as B-EM-CPP `TODO.md` 1: with CHANGE_OF_STATE on `Passenger_Alarm` and
-FAULT_LISTED on `Fault_Signals`, the `UpdateValue` of `Fault_Signals` that clears
-a fault (FAULT -> NORMAL) logs
-`BACnetChangeOfStateEventAlgorithm::SetMonitoredValue() - Error: monitoredValue has invalid datatype=[255]`.
-No effect on any check.
-
-### 3. `SetPropertySubscribable` leaves `COV_Increment` absent
-
-Filed: `chipkin/cas-bacnet-stack#4602` (ref for support).
-
-Enabling COV on Analog Input 1 does not make the stack serve `COV_Increment`;
-cl. 12.2 requires it for an Analog Input that supports COV reporting. The
-example serves it itself (read-only, 1.0), so nothing is wrong on the wire;
-the note is here so nobody removes that workaround.
+- **After a car door fault cleared, a held Passenger_Alarm was not re-judged**
+  ([#3967](https://github.com/chipkin/cas-bacnet-stack/issues/3967), closed). The
+  `UpdateValue` of `Fault_Signals` that cleared a fault ran CHANGE_OF_STATE on the
+  empty `Fault_Signals` list instead of `Passenger_Alarm` (debug log:
+  `monitoredValue has invalid datatype=[255]`).
+- **`SetPropertySubscribable` left `COV_Increment` absent**
+  (`chipkin/cas-bacnet-stack#4602`, closed). The stack now enables it, reading
+  1.0, when `Present_Value` is made subscribable. This example still enables and
+  serves Analog Input 1's `COV_Increment` itself (read-only, 1.0), as cl. 12.2
+  requires for an Analog Input that supports COV reporting.
 
 ## Known limitations of this example
 
@@ -53,7 +48,6 @@ the note is here so nobody removes that workaround.
   `Recipient_List` is writable, but the list lives only in memory and returns to
   the standard default (local broadcast) when the example restarts (cl. 12.21.8).
   Whether the examples should keep it is an open question.
-  (ref: `chipkin/chipkin-bacnet-testing-tool#684`)
 - **Analog Input 1's `Out_Of_Service` is read-only.** A test tool therefore
   cannot drive that input to exercise COV, event or DeviceCommunicationControl
   scenarios; use the `up` / `down` keys on the console instead.
@@ -62,6 +56,5 @@ the note is here so nobody removes that workaround.
   WARMSTART are supported.
 - **Operator-driven conformance rows stay manual** (AE-N-I-B, AE-ACK-B and
   DM-DDB-A steps that need a person to press a key).
-  (ref: `chipkin/chipkin-bacnet-testing-tool#680`)
 - **Time synchronization and restart are not covered by the Wire Tests**; they
   were checked by hand.
